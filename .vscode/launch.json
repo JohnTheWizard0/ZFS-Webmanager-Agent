@@ -7,15 +7,15 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'ZFS-Webmanager-Agent'",
+            "name": "Debug executable 'zfs_webmanager_agent'",
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=ZFS-Webmanager-Agent",
-                    "--package=ZFS-Webmanager-Agent"
+                    "--bin=zfs_webmanager_agent",
+                    "--package=zfs_webmanager_agent"
                 ],
                 "filter": {
-                    "name": "ZFS-Webmanager-Agent",
+                    "name": "zfs_webmanager_agent",
                     "kind": "bin"
                 }
             },
@@ -25,16 +25,16 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug unit tests in executable 'ZFS-Webmanager-Agent'",
+            "name": "Debug unit tests in executable 'zfs_webmanager_agent'",
             "cargo": {
                 "args": [
                     "test",
                     "--no-run",
-                    "--bin=ZFS-Webmanager-Agent",
-                    "--package=ZFS-Webmanager-Agent"
+                    "--bin=zfs_webmanager_agent",
+                    "--package=zfs_webmanager_agent"
                 ],
                 "filter": {
-                    "name": "ZFS-Webmanager-Agent",
+                    "name": "zfs_webmanager_agent",
                     "kind": "bin"
                 }
             },
