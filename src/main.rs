@@ -10,6 +10,12 @@ use std::sync::Arc;
 use tokio;
 use std::path::PathBuf;
 use std::collections::HashMap;  // Add this at the top with other imports
+use warp::http::HeaderMap;
+use std::fs;
+use std::io::Write;
+use rand::Rng;
+
+
 
 // Response structures
 #[derive(Serialize)]
@@ -102,7 +108,7 @@ impl ZfsManager {
 
         self.engine.create(dataset_request)?;
         Ok(())
-    }
+    }    
 
     async fn delete_dataset(&self, name: &str) -> Result<(), Box<dyn std::error::Error>> {
         self.engine.destroy(name)?;
@@ -211,35 +217,75 @@ async fn delete_dataset_handler(
     }
 }
 
+// Add this function after the existing handler functions and before the main function
+async fn check_api_key(headers: HeaderMap, our_api_key: String) -> Result<(), warp::Rejection> {
+    match headers.get("X-API-Key") {
+        Some(key) if key.to_str().map(|s| s == our_api_key).unwrap_or(false) => Ok(()),
+        _ => Err(warp::reject::custom(ApiKeyError)),
+    }
+}
+
+// Add this struct for custom error
+#[derive(Debug)]
+struct ApiKeyError;
+impl warp::reject::Reject for ApiKeyError {}
+
+fn get_or_create_api_key() -> Result<String, Box<dyn std::error::Error>> {
+    let file_path = ".zfswm_api";
+    if let Ok(api_key) = fs::read_to_string(file_path) {
+        Ok(api_key.trim().to_string())
+    } else {
+        let api_key: String = rand::thread_rng()
+            .sample_iter(&rand::distributions::Alphanumeric)
+            .take(32)
+            .map(char::from)
+            .collect();
+        let mut file = fs::File::create(file_path)?;
+        file.write_all(api_key.as_bytes())?;
+        Ok(api_key)
+    }
+}
+
 // Main function
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Generate or read API key
+    let api_key = get_or_create_api_key()?;
+    println!("API Key: {}", api_key);
+
     // Initialize ZFS manager
     let zfs = ZfsManager::new()?;
     let zfs = warp::any().map(move || zfs.clone());
 
+    // API key check filter
+    let api_key_check = warp::header::headers_cloned()
+        .and(warp::any().map(move || api_key.clone()))
+        .and_then(check_api_key);
     // Define routes
-    // Snapshot routes (your existing routes)
+    // In the main function, update your route definitions:
     let snapshot_routes = {
         let list = warp::get()
             .and(warp::path("snapshots"))
             .and(warp::path::param())
             .and(zfs.clone())
-            .and_then(list_snapshots_handler);
+            .and(api_key_check.clone())
+            .and_then(|dataset: String, zfs: ZfsManager, _: ()| list_snapshots_handler(dataset, zfs));
 
         let create = warp::post()
             .and(warp::path("snapshots"))
             .and(warp::path::param())
             .and(warp::body::json())
             .and(zfs.clone())
-            .and_then(create_snapshot_handler);
+            .and(api_key_check.clone())
+            .and_then(|dataset: String, body: CreateSnapshot, zfs: ZfsManager, _: ()| create_snapshot_handler(dataset, body, zfs));
 
         let delete = warp::delete()
             .and(warp::path("snapshots"))
             .and(warp::path::param())
             .and(warp::path::param())
             .and(zfs.clone())
-            .and_then(delete_snapshot_handler);
+            .and(api_key_check.clone())
+            .and_then(|dataset: String, snapshot_name: String, zfs: ZfsManager, _: ()| delete_snapshot_handler(dataset, snapshot_name, zfs));
 
         list.or(create).or(delete)
     };
@@ -249,23 +295,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and(warp::path("datasets"))
             .and(warp::path::param())
             .and(zfs.clone())
-            .and_then(list_datasets_handler);
-    
-        // New delete route implementation
+            .and(api_key_check.clone())
+            .and_then(|pool: String, zfs: ZfsManager, _: ()| list_datasets_handler(pool, zfs));
+
         let delete = warp::delete()
-        .and(warp::path("datasets"))
-        .and(warp::path::tail())  // This captures everything after /datasets/
-        .and(zfs.clone())
-        .and_then(|tail: warp::path::Tail, zfs: ZfsManager| {
-            delete_dataset_handler(tail.as_str().to_string(), zfs)
-        });
-    
+            .and(warp::path("datasets"))
+            .and(warp::path::tail())
+            .and(zfs.clone())
+            .and(api_key_check.clone())
+            .and_then(|tail: warp::path::Tail, zfs: ZfsManager, _: ()| delete_dataset_handler(tail.as_str().to_string(), zfs));
+
         let create = warp::post()
             .and(warp::path("datasets"))
             .and(warp::body::json())
             .and(zfs.clone())
-            .and_then(create_dataset_handler);
-    
+            .and(api_key_check.clone())
+            .and_then(|body: CreateDataset, zfs: ZfsManager, _: ()| create_dataset_handler(body, zfs));
+
         list.or(create).or(delete)
     };
 
@@ -277,3 +323,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
