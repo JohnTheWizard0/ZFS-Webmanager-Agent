@@ -2,7 +2,7 @@
 # For example "manage_zfs.py"
 
 import requests
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List
 from urllib.parse import quote
 from dataclasses import dataclass
 from enum import Enum
@@ -12,13 +12,6 @@ import os
 class DatasetKind(Enum):
     FILESYSTEM = "filesystem"
     VOLUME = "volume"
-
-class RaidType(Enum):
-    SINGLE = None
-    MIRROR = "mirror"
-    RAIDZ = "raidz"
-    RAIDZ2 = "raidz2"
-    RAIDZ3 = "raidz3"
 
 class ZFSError(Exception):
     """Base exception for ZFS operations"""
@@ -44,18 +37,6 @@ class ZFSConfig:
     timeout: int = 30
     verify_ssl: bool = True
     api_key: Optional[str] = None
-
-@dataclass
-class PoolStatus:
-    """Status information about a pool"""
-    name: str
-    health: str
-    size: int
-    allocated: int
-    free: int
-    capacity: int
-    vdevs: int
-    errors: Optional[str] = None
 
 class ZFSRemote:
     """Client for remote ZFS management"""
@@ -131,74 +112,6 @@ class ZFSRemote:
             error_msg = e.response.text if hasattr(e, 'response') and hasattr(e.response, 'text') else str(e)
             raise OperationError(f"Operation failed: {error_msg}")
 
-    #-------------------------------------------------
-    # Pool Management Methods
-    #-------------------------------------------------
-    
-    def list_pools(self) -> List[str]:
-        """List all available pools
-        
-        Returns:
-            List of pool names
-        """
-        response = self._make_request('GET', 'pools')
-        return response.get("pools", [])
-    
-    def get_pool_status(self, name: str) -> PoolStatus:
-        """Get detailed status for a pool
-        
-        Args:
-            name: Pool name
-            
-        Returns:
-            PoolStatus object with status information
-        """
-        response = self._make_request('GET', f'pools/{quote(name)}')
-        if response.get("status") == "error":
-            raise OperationError(response.get("message", "Failed to get pool status"))
-            
-        return PoolStatus(
-            name=response.get("name", name),
-            health=response.get("health", "UNKNOWN"),
-            size=response.get("size", 0),
-            allocated=response.get("allocated", 0),
-            free=response.get("free", 0),
-            capacity=response.get("capacity", 0),
-            vdevs=response.get("vdevs", 0),
-            errors=response.get("errors")
-        )
-    
-    def create_pool(self, name: str, disks: List[str], raid_type: RaidType = RaidType.SINGLE) -> None:
-        """Create a new pool
-        
-        Args:
-            name: Pool name
-            disks: List of disks to use
-            raid_type: RAID configuration to use
-        """
-        payload = {
-            "name": name,
-            "disks": disks,
-            "raid_type": raid_type.value
-        }
-        
-        self._make_request('POST', 'pools', json=payload)
-        self.logger.info(f"Created pool: {name} with {raid_type.name} configuration")
-    
-    def destroy_pool(self, name: str, force: bool = False) -> None:
-        """Destroy a pool
-        
-        Args:
-            name: Pool name
-            force: Whether to force destruction even if the pool has datasets
-        """
-        self._make_request('DELETE', f'pools/{quote(name)}{"?force=true" if force else ""}')
-        self.logger.info(f"Destroyed pool: {name}")
-        
-    #-------------------------------------------------
-    # Dataset Management Methods
-    #-------------------------------------------------
-    
     def create_dataset(self, name: str, kind: DatasetKind = DatasetKind.FILESYSTEM,
                   properties: Optional[Dict[str, Any]] = None) -> None:
         """Create a new dataset
@@ -253,10 +166,6 @@ class ZFSRemote:
         self._make_request('POST', f'datasets/{quote(dataset)}/properties', json=payload)
         self.logger.info(f"Set properties on {dataset}: {properties}")
 
-    #-------------------------------------------------
-    # Snapshot Management Methods
-    #-------------------------------------------------
-    
     def create_snapshot(self, dataset: str, snapshot_name: str) -> None:
         """Create a new snapshot
         

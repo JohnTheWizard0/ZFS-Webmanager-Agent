@@ -1,21 +1,29 @@
+// Import required modules from the Warp web framework for creating HTTP endpoints
 use warp::{Filter, Rejection, Reply};
+// Import serialization/deserialization functionality
 use serde::{Deserialize, Serialize};
+// Import ZFS related functionality from libzetta
 use libzetta::zfs::{
-    DelegatingZfsEngine, 
-    ZfsEngine,
-    CreateDatasetRequest, 
-    DatasetKind
+    DelegatingZfsEngine, ZfsEngine, CreateDatasetRequest, DatasetKind
 };
+// Import additional ZPool functionality from libzetta
+use libzetta::zpool::{
+    ZpoolEngine, ZpoolOpen3, CreateZpoolRequest, CreateVdevRequest, 
+    CreateMode, DestroyMode, Zpool
+};
+// Standard library imports
 use std::sync::Arc;
 use tokio;
 use std::path::PathBuf;
-use std::collections::HashMap;  // Add this at the top with other imports
+use std::collections::HashMap;
 use warp::http::HeaderMap;
 use std::fs;
 use std::io::Write;
 use rand::Rng;
 
-
+//-----------------------------------------------------
+// DATA MODELS
+//-----------------------------------------------------
 
 // Response structures
 #[derive(Serialize)]
@@ -35,7 +43,7 @@ struct CreateSnapshot {
     snapshot_name: String,
 }
 
-// Request/Response structures for datasets
+// Dataset structures
 #[derive(Deserialize)]
 struct CreateDataset {
     name: String,
@@ -49,7 +57,53 @@ struct DatasetResponse {
     status: String,
 }
 
-// ZFS wrapper to make it easier to share between routes
+// Pool status response
+#[derive(Serialize)]
+struct PoolStatus {
+    name: String,
+    health: String,
+    size: u64,
+    allocated: u64,
+    free: i64,         // Changed from u64 to i64
+    capacity: u8,       // Changed from u64 to u8
+    vdevs: u32,
+    errors: Option<String>,
+}
+
+// Pool list response
+#[derive(Serialize)]
+struct PoolListResponse {
+    pools: Vec<String>,
+    status: String,
+}
+
+// Pool creation request
+#[derive(Deserialize)]
+struct CreatePool {
+    name: String,
+    disks: Vec<String>,
+    raid_type: Option<String>, // "mirror", "raidz", "raidz2", "raidz3", or null for individual disks
+}
+
+// Helper functions for response generation
+fn success_response(message: &str) -> ActionResponse {
+    ActionResponse {
+        status: "success".to_string(),
+        message: message.to_string(),
+    }
+}
+
+fn error_response(error: &dyn std::error::Error) -> ActionResponse {
+    ActionResponse {
+        status: "error".to_string(),
+        message: error.to_string(),
+    }
+}
+
+//-----------------------------------------------------
+// ZFS MANAGER IMPLEMENTATION
+//-----------------------------------------------------
+
 #[derive(Clone)]
 struct ZfsManager {
     engine: Arc<DelegatingZfsEngine>,
@@ -62,7 +116,129 @@ impl ZfsManager {
         })
     }
 
-    // List snapshots for a dataset
+    // List all available pools
+    async fn list_pools(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        // Use ZpoolOpen3 for zpool operations
+        let zpool_engine = ZpoolOpen3::default();
+        
+        // Get all pools with status
+        let pools = zpool_engine.status_all(Default::default())?;
+        
+        // Extract pool names
+        let pool_names = pools.into_iter()
+            .map(|pool| pool.name().clone())
+            .collect();
+            
+        Ok(pool_names)
+    }
+
+    // Fixed get_pool_status method with proper type handling
+    async fn get_pool_status(&self, name: &str) -> Result<PoolStatus, Box<dyn std::error::Error>> {
+        let zpool_engine = ZpoolOpen3::default();
+        
+        // Check if pool exists
+        if !zpool_engine.exists(name)? {
+            return Err(format!("Pool '{}' not found", name).into());
+        }
+        
+        // Get detailed status
+        let pool = zpool_engine.status(name, Default::default())?;
+        
+        // Get pool properties for size information
+        let properties = zpool_engine.read_properties(name)?;
+        
+        // Convert to our response format
+        Ok(PoolStatus {
+            name: pool.name().clone(),
+            health: format!("{:?}", pool.health()),
+            // Dereference the values before casting
+            size: *properties.size() as u64,
+            allocated: *properties.alloc() as u64,
+            free: *properties.free() as i64,  // Cast u64 to i64
+            capacity: *properties.capacity() as u8,  // Cast u64 to u8
+            vdevs: pool.vdevs().len() as u32,
+            errors: pool.errors().clone(),
+        })
+    }
+
+    // Create a new pool
+    async fn create_pool(&self, request: CreatePool) -> Result<(), Box<dyn std::error::Error>> {
+        let zpool_engine = ZpoolOpen3::default();
+        
+        // Check if pool already exists
+        if zpool_engine.exists(&request.name)? {
+            return Err(format!("Pool '{}' already exists", request.name).into());
+        }
+        
+        // Convert disks to vdevs based on configuration
+        let vdevs = match request.raid_type.as_deref() {
+            Some("mirror") => {
+                if request.disks.len() < 2 {
+                    return Err("Mirror requires at least 2 disks".into());
+                }
+                vec![CreateVdevRequest::Mirror(request.disks.iter().map(PathBuf::from).collect())]
+            },
+            Some("raidz") => {
+                if request.disks.len() < 3 {
+                    return Err("RAIDZ requires at least 3 disks".into());
+                }
+                vec![CreateVdevRequest::RaidZ(request.disks.iter().map(PathBuf::from).collect())]
+            },
+            Some("raidz2") => {
+                if request.disks.len() < 4 {
+                    return Err("RAIDZ2 requires at least 4 disks".into());
+                }
+                vec![CreateVdevRequest::RaidZ2(request.disks.iter().map(PathBuf::from).collect())]
+            },
+            Some("raidz3") => {
+                if request.disks.len() < 5 {
+                    return Err("RAIDZ3 requires at least 5 disks".into());
+                }
+                vec![CreateVdevRequest::RaidZ3(request.disks.iter().map(PathBuf::from).collect())]
+            },
+            _ => {
+                // Default to individual disks (no raid)
+                request.disks.iter()
+                    .map(|disk| CreateVdevRequest::SingleDisk(PathBuf::from(disk)))
+                    .collect()
+            }
+        };
+
+        // Build the create request
+        let create_request = CreateZpoolRequest::builder()
+            .name(request.name)
+            .vdevs(vdevs)
+            .create_mode(CreateMode::Gentle) // Can be overridden to Force if needed
+            .build()?;
+            
+        // Create the pool
+        zpool_engine.create(create_request)?;
+        
+        Ok(())
+    }
+
+    // Destroy an existing pool
+    async fn destroy_pool(&self, name: &str, force: bool) -> Result<(), Box<dyn std::error::Error>> {
+        let zpool_engine = ZpoolOpen3::default();
+        
+        // Check if pool exists
+        if !zpool_engine.exists(name)? {
+            return Err(format!("Pool '{}' not found", name).into());
+        }
+        
+        // Determine destroy mode based on force parameter
+        let mode = if force {
+            DestroyMode::Force
+        } else {
+            DestroyMode::Gentle
+        };
+        
+        // Destroy the pool
+        zpool_engine.destroy(name, mode)?;
+        
+        Ok(())
+    }
+
     async fn list_snapshots(&self, dataset: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let snapshots = self.engine.list_snapshots(dataset)?;
         Ok(snapshots
@@ -71,14 +247,12 @@ impl ZfsManager {
             .collect())
     }
 
-    // Create a new snapshot
     async fn create_snapshot(&self, dataset: &str, snapshot_name: &str) -> Result<(), Box<dyn std::error::Error>> {
         let full_path = PathBuf::from(format!("{}@{}", dataset, snapshot_name));
         self.engine.snapshot(&[full_path], None)?;
         Ok(())
     }
 
-    // Delete a snapshot
     async fn delete_snapshot(&self, dataset: &str, snapshot_name: &str) -> Result<(), Box<dyn std::error::Error>> {
         let full_path = PathBuf::from(format!("{}@{}", dataset, snapshot_name));
         self.engine.destroy(full_path)?;
@@ -114,10 +288,115 @@ impl ZfsManager {
         self.engine.destroy(name)?;
         Ok(())
     }
-
 }
 
-// Route handlers
+//-----------------------------------------------------
+// AUTHENTICATION
+//-----------------------------------------------------
+
+// Custom error type for API key validation failures
+#[derive(Debug)]
+struct ApiKeyError;
+impl warp::reject::Reject for ApiKeyError {}
+
+// Function to get an existing API key or create a new one
+fn get_or_create_api_key() -> Result<String, Box<dyn std::error::Error>> {
+    let file_path = ".zfswm_api";
+    if let Ok(api_key) = fs::read_to_string(file_path) {
+        Ok(api_key.trim().to_string())
+    } else {
+        let api_key: String = rand::thread_rng()
+            .sample_iter(&rand::distributions::Alphanumeric)
+            .take(32)
+            .map(char::from)
+            .collect();
+        let mut file = fs::File::create(file_path)?;
+        file.write_all(api_key.as_bytes())?;
+        Ok(api_key)
+    }
+}
+
+// Check if the API key is valid
+async fn check_api_key(headers: HeaderMap, our_api_key: String) -> Result<(), Rejection> {
+    match headers.get("X-API-Key") {
+        Some(key) if key.to_str().map(|s| s == our_api_key).unwrap_or(false) => Ok(()),
+        _ => Err(warp::reject::custom(ApiKeyError)),
+    }
+}
+
+//-----------------------------------------------------
+// POOL HANDLERS
+//-----------------------------------------------------
+
+// List all pools
+async fn list_pools_handler(
+    zfs: ZfsManager,
+) -> Result<impl Reply, Rejection> {
+    match zfs.list_pools().await {
+        Ok(pools) => Ok(warp::reply::json(&PoolListResponse {
+            pools,
+            status: "success".to_string(),
+        })),
+        Err(e) => Ok(warp::reply::json(&ActionResponse {
+            status: "error".to_string(),
+            message: e.to_string(),
+        })),
+    }
+}
+
+// Get pool status
+async fn get_pool_status_handler(
+    name: String,
+    zfs: ZfsManager,
+) -> Result<impl Reply, Rejection> {
+    match zfs.get_pool_status(&name).await {
+        Ok(status) => Ok(warp::reply::json(&status)),
+        Err(e) => Ok(warp::reply::json(&ActionResponse {
+            status: "error".to_string(),
+            message: e.to_string(),
+        })),
+    }
+}
+
+// Create a new pool
+async fn create_pool_handler(
+    body: CreatePool,
+    zfs: ZfsManager,
+) -> Result<impl Reply, Rejection> {
+    match zfs.create_pool(body).await {
+        Ok(_) => Ok(warp::reply::json(&ActionResponse {
+            status: "success".to_string(),
+            message: "Pool created successfully".to_string(),
+        })),
+        Err(e) => Ok(warp::reply::json(&ActionResponse {
+            status: "error".to_string(),
+            message: e.to_string(),
+        })),
+    }
+}
+
+// Destroy a pool
+async fn destroy_pool_handler(
+    name: String,
+    force: bool,
+    zfs: ZfsManager,
+) -> Result<impl Reply, Rejection> {
+    match zfs.destroy_pool(&name, force).await {
+        Ok(_) => Ok(warp::reply::json(&ActionResponse {
+            status: "success".to_string(),
+            message: "Pool destroyed successfully".to_string(),
+        })),
+        Err(e) => Ok(warp::reply::json(&ActionResponse {
+            status: "error".to_string(),
+            message: e.to_string(),
+        })),
+    }
+}
+
+//-----------------------------------------------------
+// SNAPSHOT HANDLERS
+//-----------------------------------------------------
+
 async fn list_snapshots_handler(
     dataset: String,
     zfs: ZfsManager,
@@ -140,14 +419,8 @@ async fn create_snapshot_handler(
     zfs: ZfsManager,
 ) -> Result<impl Reply, Rejection> {
     match zfs.create_snapshot(&dataset, &body.snapshot_name).await {
-        Ok(_) => Ok(warp::reply::json(&ActionResponse {
-            status: "success".to_string(),
-            message: "Snapshot created successfully".to_string(),
-        })),
-        Err(e) => Ok(warp::reply::json(&ActionResponse {
-            status: "error".to_string(),
-            message: e.to_string(),
-        })),
+        Ok(_) => Ok(warp::reply::json(&success_response("Snapshot created successfully"))),
+        Err(e) => Ok(warp::reply::json(&error_response(&*e))),
     }
 }
 
@@ -157,18 +430,15 @@ async fn delete_snapshot_handler(
     zfs: ZfsManager,
 ) -> Result<impl Reply, Rejection> {
     match zfs.delete_snapshot(&dataset, &snapshot_name).await {
-        Ok(_) => Ok(warp::reply::json(&ActionResponse {
-            status: "success".to_string(),
-            message: "Snapshot deleted successfully".to_string(),
-        })),
-        Err(e) => Ok(warp::reply::json(&ActionResponse {
-            status: "error".to_string(),
-            message: e.to_string(),
-        })),
+        Ok(_) => Ok(warp::reply::json(&success_response("Snapshot deleted successfully"))),
+        Err(e) => Ok(warp::reply::json(&error_response(&*e))),
     }
 }
 
-// Route handlers for datasets
+//-----------------------------------------------------
+// DATASET HANDLERS
+//-----------------------------------------------------
+
 async fn list_datasets_handler(
     pool: String,
     zfs: ZfsManager,
@@ -178,10 +448,7 @@ async fn list_datasets_handler(
             datasets,
             status: "success".to_string(),
         })),
-        Err(e) => Ok(warp::reply::json(&ActionResponse {
-            status: "error".to_string(),
-            message: e.to_string(),
-        })),
+        Err(e) => Ok(warp::reply::json(&error_response(&*e))),
     }
 }
 
@@ -190,14 +457,8 @@ async fn create_dataset_handler(
     zfs: ZfsManager,
 ) -> Result<impl Reply, Rejection> {
     match zfs.create_dataset(body).await {
-        Ok(_) => Ok(warp::reply::json(&ActionResponse {
-            status: "success".to_string(),
-            message: "Dataset created successfully".to_string(),
-        })),
-        Err(e) => Ok(warp::reply::json(&ActionResponse {
-            status: "error".to_string(),
-            message: e.to_string(),
-        })),
+        Ok(_) => Ok(warp::reply::json(&success_response("Dataset created successfully"))),
+        Err(e) => Ok(warp::reply::json(&error_response(&*e))),
     }
 }
 
@@ -206,64 +467,83 @@ async fn delete_dataset_handler(
     zfs: ZfsManager,
 ) -> Result<impl Reply, Rejection> {
     match zfs.delete_dataset(&name).await {
-        Ok(_) => Ok(warp::reply::json(&ActionResponse {
-            status: "success".to_string(),
-            message: "Dataset deleted successfully".to_string(),
-        })),
-        Err(e) => Ok(warp::reply::json(&ActionResponse {
-            status: "error".to_string(),
-            message: e.to_string(),
-        })),
+        Ok(_) => Ok(warp::reply::json(&success_response("Dataset deleted successfully"))),
+        Err(e) => Ok(warp::reply::json(&error_response(&*e))),
     }
 }
 
-// Add this function after the existing handler functions and before the main function
-async fn check_api_key(headers: HeaderMap, our_api_key: String) -> Result<(), warp::Rejection> {
-    match headers.get("X-API-Key") {
-        Some(key) if key.to_str().map(|s| s == our_api_key).unwrap_or(false) => Ok(()),
-        _ => Err(warp::reject::custom(ApiKeyError)),
-    }
-}
+//-----------------------------------------------------
+// MAIN FUNCTION
+//-----------------------------------------------------
 
-// Add this struct for custom error
-#[derive(Debug)]
-struct ApiKeyError;
-impl warp::reject::Reject for ApiKeyError {}
-
-fn get_or_create_api_key() -> Result<String, Box<dyn std::error::Error>> {
-    let file_path = ".zfswm_api";
-    if let Ok(api_key) = fs::read_to_string(file_path) {
-        Ok(api_key.trim().to_string())
-    } else {
-        let api_key: String = rand::thread_rng()
-            .sample_iter(&rand::distributions::Alphanumeric)
-            .take(32)
-            .map(char::from)
-            .collect();
-        let mut file = fs::File::create(file_path)?;
-        file.write_all(api_key.as_bytes())?;
-        Ok(api_key)
-    }
-}
-
-// Main function
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("Starting ZFS Web Manager...");
+    println!("Version: {}", env!("CARGO_PKG_VERSION"));
     // Generate or read API key
     let api_key = get_or_create_api_key()?;
-    println!("API Key: {}", api_key);
+    println!("\nAPI Key: {}", api_key);
 
     // Initialize ZFS manager
     let zfs = ZfsManager::new()?;
+    // Create a warp filter that injects the ZFS manager into route handlers
     let zfs = warp::any().map(move || zfs.clone());
 
-    // API key check filter
+    // API key check filter - reusable middleware for authentication
     let api_key_check = warp::header::headers_cloned()
         .and(warp::any().map(move || api_key.clone()))
         .and_then(check_api_key);
-    // Define routes
-    // In the main function, update your route definitions:
+
+
+    // Define pool-related routes
+    let pool_routes = {
+        // GET /pools - List all pools
+        let list = warp::get()
+            .and(warp::path("pools"))
+            .and(warp::path::end())
+            .and(zfs.clone())
+            .and(api_key_check.clone())
+            .and_then(|zfs: ZfsManager, _: ()| list_pools_handler(zfs));
+
+        // GET /pools/{name} - Get pool status
+        let status = warp::get()
+            .and(warp::path("pools"))
+            .and(warp::path::param())
+            .and(warp::path::end())
+            .and(zfs.clone())
+            .and(api_key_check.clone())
+            .and_then(|name: String, zfs: ZfsManager, _: ()| get_pool_status_handler(name, zfs));
+
+        // POST /pools - Create a new pool
+        let create = warp::post()
+            .and(warp::path("pools"))
+            .and(warp::path::end())
+            .and(warp::body::json())
+            .and(zfs.clone())
+            .and(api_key_check.clone())
+            .and_then(|body: CreatePool, zfs: ZfsManager, _: ()| create_pool_handler(body, zfs));
+
+        // DELETE /pools/{name} - Destroy a pool
+        // Query parameter ?force=true can be used for forced destruction
+        let destroy = warp::delete()
+            .and(warp::path("pools"))
+            .and(warp::path::param())
+            .and(warp::path::end())
+            .and(warp::query::<HashMap<String, String>>())
+            .and(zfs.clone())
+            .and(api_key_check.clone())
+            .and_then(|name: String, query: HashMap<String, String>, zfs: ZfsManager, _: ()| {
+                let force = query.get("force").map(|v| v == "true").unwrap_or(false);
+                destroy_pool_handler(name, force, zfs)
+            });
+
+        // Combine all pool routes
+        list.or(status).or(create).or(destroy)
+    };
+
+    // Define snapshot-related routes
     let snapshot_routes = {
+        // GET /snapshots/{dataset} - List snapshots
         let list = warp::get()
             .and(warp::path("snapshots"))
             .and(warp::path::param())
@@ -271,6 +551,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and(api_key_check.clone())
             .and_then(|dataset: String, zfs: ZfsManager, _: ()| list_snapshots_handler(dataset, zfs));
 
+        // POST /snapshots/{dataset} - Create snapshot
         let create = warp::post()
             .and(warp::path("snapshots"))
             .and(warp::path::param())
@@ -279,6 +560,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and(api_key_check.clone())
             .and_then(|dataset: String, body: CreateSnapshot, zfs: ZfsManager, _: ()| create_snapshot_handler(dataset, body, zfs));
 
+        // DELETE /snapshots/{dataset}/{snapshot_name} - Delete snapshot
         let delete = warp::delete()
             .and(warp::path("snapshots"))
             .and(warp::path::param())
@@ -287,10 +569,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and(api_key_check.clone())
             .and_then(|dataset: String, snapshot_name: String, zfs: ZfsManager, _: ()| delete_snapshot_handler(dataset, snapshot_name, zfs));
 
+        // Combine all snapshot routes
         list.or(create).or(delete)
     };
 
+    // Define dataset-related routes
     let dataset_routes = {
+        // GET /datasets/{pool} - List datasets
         let list = warp::get()
             .and(warp::path("datasets"))
             .and(warp::path::param())
@@ -298,6 +583,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and(api_key_check.clone())
             .and_then(|pool: String, zfs: ZfsManager, _: ()| list_datasets_handler(pool, zfs));
 
+        // DELETE /datasets/{name} - Delete dataset
         let delete = warp::delete()
             .and(warp::path("datasets"))
             .and(warp::path::tail())
@@ -305,6 +591,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and(api_key_check.clone())
             .and_then(|tail: warp::path::Tail, zfs: ZfsManager, _: ()| delete_dataset_handler(tail.as_str().to_string(), zfs));
 
+        // POST /datasets - Create dataset
         let create = warp::post()
             .and(warp::path("datasets"))
             .and(warp::body::json())
@@ -312,15 +599,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and(api_key_check.clone())
             .and_then(|body: CreateDataset, zfs: ZfsManager, _: ()| create_dataset_handler(body, zfs));
 
+        // Combine all dataset routes
         list.or(create).or(delete)
     };
 
     // Combine all routes
-    let routes = snapshot_routes.or(dataset_routes);
+    let routes = snapshot_routes.or(dataset_routes).or(pool_routes);
 
-    println!("Server starting on port 9876");
+    // Start the HTTP server
+    println!("Server starting on port: 9876");
     warp::serve(routes).run(([0, 0, 0, 0], 9876)).await;
 
     Ok(())
 }
-
