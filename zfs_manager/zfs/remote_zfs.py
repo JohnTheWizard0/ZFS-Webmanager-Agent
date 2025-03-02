@@ -145,7 +145,33 @@ class ZFSRemote:
             # Convert operation errors during health checks to connection errors
             # since they likely indicate the service is not working properly
             raise ConnectionError(f"Health check failed: {e}")
-
+            
+    def execute_command(self, command: str, args: List[str] = None) -> Dict[str, Any]:
+        """Execute a Linux command on the remote ZFS server
+        
+        Args:
+            command: Command to execute (e.g., 'lsblk', 'ls')
+            args: Optional list of command arguments
+            
+        Returns:
+            Dictionary containing:
+            - status: "success" or "error"
+            - output: Command output (stdout and stderr combined)
+            - exit_code: Exit code of the command (0 for success)
+        
+        Raises:
+            ConnectionError: If connection to remote host fails
+            AuthenticationError: If API key authentication fails
+            OperationError: If operation fails on the server
+        """
+        payload = {
+            "command": command,
+            "args": args
+        }
+        
+        return self._make_request('POST', 'command', json=payload)
+    
+    
     #-------------------------------------------------
     # Pool Management Methods
     #-------------------------------------------------

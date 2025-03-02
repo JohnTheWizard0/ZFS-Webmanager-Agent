@@ -23,11 +23,25 @@ use rand::Rng;
 use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::convert::Infallible;
-
+use std::process::Command;
 
 //-----------------------------------------------------
 // DATA MODELS
 //-----------------------------------------------------
+
+// Add these data structures for the Linux command API
+#[derive(Deserialize)]
+struct CommandRequest {
+    command: String,
+    args: Option<Vec<String>>,
+}
+
+#[derive(Serialize)]
+struct CommandResponse {
+    status: String,
+    output: String,
+    exit_code: Option<i32>,
+}
 
 // Define a struct to track the last action
 #[derive(Clone, Serialize)]
@@ -145,6 +159,32 @@ fn with_action_tracking(
         .untuple_one()
 }
 
+// Add this function to execute Linux commands
+fn execute_linux_command(command: &str, args: &[&str]) -> Result<(String, Option<i32>), std::io::Error> {
+    // Create a new Command instance
+    let output = Command::new(command)
+        .args(args)
+        .output()?;
+    
+    // Combine stdout and stderr
+    let mut result = String::new();
+    
+    // Add stdout if not empty
+    if !output.stdout.is_empty() {
+        result.push_str(&String::from_utf8_lossy(&output.stdout));
+    }
+    
+    // Add stderr if not empty
+    if !output.stderr.is_empty() {
+        if !result.is_empty() {
+            result.push_str("\n\nSTDERR:\n");
+        }
+        result.push_str(&String::from_utf8_lossy(&output.stderr));
+    }
+    
+    // Return the output and exit code
+    Ok((result, output.status.code()))
+}
 
 //-----------------------------------------------------
 // ZFS MANAGER IMPLEMENTATION
@@ -540,6 +580,47 @@ async fn health_check_handler(
     }))
 }
 
+// Add this handler function for the API endpoint
+async fn execute_command_handler(
+    body: CommandRequest,
+    last_action: Arc<RwLock<Option<LastAction>>>,
+) -> Result<impl Reply, Rejection> {
+    // Convert Vec<String> to Vec<&str> for the arguments
+    let args: Vec<&str> = match &body.args {
+        Some(arg_vec) => arg_vec.iter().map(|s| s.as_str()).collect(),
+        None => Vec::new(),
+    };
+    
+    // Execute the command
+    match execute_linux_command(&body.command, &args) {
+        Ok((output, exit_code)) => {
+            // Update the last action tracker
+            if let Ok(mut last_action) = last_action.write() {
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                
+                *last_action = Some(LastAction {
+                    function: format!("execute_command: {}", body.command),
+                    timestamp: now,
+                });
+            }
+            
+            Ok(warp::reply::json(&CommandResponse {
+                status: if exit_code.unwrap_or(1) == 0 { "success".to_string() } else { "error".to_string() },
+                output,
+                exit_code,
+            }))
+        },
+        Err(e) => Ok(warp::reply::json(&ActionResponse {
+            status: "error".to_string(),
+            message: format!("Failed to execute command: {}", e),
+        })),
+    }
+}
+
+
 //-----------------------------------------------------
 // MAIN FUNCTION
 //-----------------------------------------------------
@@ -694,8 +775,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         list.or(create).or(delete)
     };
 
+    // Define command execution routes
+    let command_routes = {
+        // POST /command - Execute a Linux command
+        let execute = warp::post()
+            .and(warp::path("command"))
+            .and(warp::path::end())
+            .and(warp::body::json())
+            .and(warp::any().map(move || last_action.clone()))
+            .and(api_key_check.clone())
+            .and_then(|body: CommandRequest, last_action: Arc<RwLock<Option<LastAction>>>, _| {
+                execute_command_handler(body, last_action)
+            });
+
+        execute
+    };
+
     // Combine all routes
-    let routes = snapshot_routes.or(dataset_routes).or(pool_routes).or(health_routes);
+    let routes = snapshot_routes
+    .or(dataset_routes)
+    .or(pool_routes)
+    .or(health_routes)
+    .or(command_routes);
 
     // Start the HTTP server
     println!("Server starting on port: 9876");

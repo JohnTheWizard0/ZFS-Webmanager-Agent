@@ -85,7 +85,8 @@ class ZFSInteractiveUI:
             "1": "Pool Management",
             "2": "Dataset Management",
             "3": "Snapshot Management",
-            "4": "Check Server Health"
+            "4": "Execute Command",
+            "5": "Check Server Health"
         }
         
         while True:
@@ -98,6 +99,8 @@ class ZFSInteractiveUI:
             elif choice == '3':
                 self.snapshot_menu()
             elif choice == '4':
+                self.execute_command_menu()
+            elif choice == '5':
                 self.check_server_health()
     
     def pool_menu(self) -> None:
@@ -188,6 +191,51 @@ class ZFSInteractiveUI:
             print(f"\nError: Server not responsive: {e}")
         except Exception as e:
             print(f"\nError checking server health: {e}")
+    
+    # Add this new method to the ZFSInteractiveUI class:
+    def execute_command_menu(self) -> None:
+        """Execute a Linux command on the remote server"""
+        while True:
+            print("\n" + "=" * 60)
+            print(" Command Execution ".center(60, "="))
+            print("=" * 60)
+            print("  Enter a Linux command to execute on the remote server.")
+            print("  Example: lsblk, ls -la /etc, df -h")
+            print("  Enter 'b' to go back or 'q' to quit.")
+            print("=" * 60)
+            
+            command_line = input("\nCommand: ").strip()
+            
+            if command_line.lower() == 'b':
+                return
+            elif command_line.lower() == 'q':
+                print("Exiting ZFS management.")
+                sys.exit(0)
+            elif command_line:
+                # Parse the command line into command and arguments
+                parts = command_line.split()
+                command = parts[0]
+                args = parts[1:] if len(parts) > 1 else None
+                
+                try:
+                    print(f"\nExecuting: {command_line}")
+                    result = self.zfs.execute_command(command, args)
+                    
+                    print("\nCommand Output:")
+                    print("-" * 60)
+                    print(result["output"])
+                    print("-" * 60)
+                    
+                    if result.get("exit_code") != 0:
+                        print(f"Command exited with code: {result.get('exit_code')}")
+                    
+                    input("\nPress Enter to continue...")
+                except Exception as e:
+                    print(f"\nError executing command: {e}")
+                    input("Press Enter to continue...")
+            else:
+                print("No command entered.")
+                print("No command entered.")
     
     #-------------------------------------------------
     # Pool Management Functions
