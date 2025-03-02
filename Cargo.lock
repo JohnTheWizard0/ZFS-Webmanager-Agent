@@ -1846,7 +1846,7 @@ dependencies = [
 
 [[package]]
 name = "zfs_webmanager_agent"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "libzetta",
  "rand",
