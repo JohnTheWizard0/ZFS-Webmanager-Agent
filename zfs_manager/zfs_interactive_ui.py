@@ -84,7 +84,8 @@ class ZFSInteractiveUI:
         options = {
             "1": "Pool Management",
             "2": "Dataset Management",
-            "3": "Snapshot Management"
+            "3": "Snapshot Management",
+            "4": "Check Server Health"
         }
         
         while True:
@@ -96,6 +97,8 @@ class ZFSInteractiveUI:
                 self.dataset_menu()
             elif choice == '3':
                 self.snapshot_menu()
+            elif choice == '4':
+                self.check_server_health()
     
     def pool_menu(self) -> None:
         """Display the pool management menu"""
@@ -162,6 +165,29 @@ class ZFSInteractiveUI:
                 self.create_snapshot()
             elif choice == '3':
                 self.delete_snapshot()
+
+    # Add this method to the ZFSInteractiveUI class
+    def check_server_health(self) -> None:
+        """Check server health and display the results"""
+        try:
+            health_info = self.zfs.check_health()
+
+            print("\nZFS Server Health:")
+            print(f"  Status: {health_info['status']}")
+            print(f"  Version: {health_info['version']}")
+            
+            if health_info.get('last_action'):
+                last_action = health_info['last_action']
+                # Convert Unix timestamp to readable format
+                from datetime import datetime
+                timestamp = datetime.fromtimestamp(last_action['timestamp'])
+                print(f"  Last action: {last_action['function']} at {timestamp}")
+            else:
+                print("  No actions recorded yet")
+        except ConnectionError as e:
+            print(f"\nError: Server not responsive: {e}")
+        except Exception as e:
+            print(f"\nError checking server health: {e}")
     
     #-------------------------------------------------
     # Pool Management Functions
@@ -565,18 +591,37 @@ def main():
         sys.exit(1)
     
     try:
+        print(f"Connecting to ZFS server at {args.host}:{args.port}...")
         ui = ZFSInteractiveUI(args.host, args.port, args.api_key)
-        print(f"Connected to ZFS server at {args.host}:{args.port}")
+        
+        # Use health check to verify connection
+        health_info = ui.zfs.check_health()
+        
+        print(f"Successfully connected to ZFS server at {args.host}:{args.port}")
+        print(f"Server version: {health_info['version']}")
+        if health_info.get('last_action'):
+            from datetime import datetime
+            last_action = health_info['last_action']
+            timestamp = datetime.fromtimestamp(last_action['timestamp'])
+            print(f"Last server activity: {last_action['function']} at {timestamp}")
+        
         ui.main_menu()
+        
     except KeyboardInterrupt:
         print("\nExiting...")
     except ConnectionError as e:
-        print(f"Error connecting to ZFS server: {e}")
-    except AuthenticationError as e:
-        print(f"Authentication failed: {e}")
+        print(f"\nError: Could not connect to ZFS server at {args.host}:{args.port}")
+        print(f"Detail: {e}")
+        input("Press Enter to exit...")
+        sys.exit(1)
+    except AuthenticationError:
+        print(f"\nError: Authentication failed. Please check your API key.")
+        input("Press Enter to exit...")
+        sys.exit(1) 
     except Exception as e:
-        logger.exception("Unexpected error")
-        print(f"Unexpected error: {e}")
+        print(f"\nUnexpected error: {e}")
+        input("Press Enter to exit...")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

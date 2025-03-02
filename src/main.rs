@@ -9,7 +9,7 @@ use libzetta::zfs::{
 // Import additional ZPool functionality from libzetta
 use libzetta::zpool::{
     ZpoolEngine, ZpoolOpen3, CreateZpoolRequest, CreateVdevRequest, 
-    CreateMode, DestroyMode, Zpool
+    CreateMode, DestroyMode
 };
 // Standard library imports
 use std::sync::Arc;
@@ -20,10 +20,29 @@ use warp::http::HeaderMap;
 use std::fs;
 use std::io::Write;
 use rand::Rng;
+use std::sync::RwLock;
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::convert::Infallible;
+
 
 //-----------------------------------------------------
 // DATA MODELS
 //-----------------------------------------------------
+
+// Define a struct to track the last action
+#[derive(Clone, Serialize)]
+struct LastAction {
+    function: String,
+    timestamp: u64,
+}
+
+// Define the health response struct
+#[derive(Serialize)]
+struct HealthResponse {
+    status: String,
+    version: String,
+    last_action: Option<LastAction>,
+}
 
 // Response structures
 #[derive(Serialize)]
@@ -99,6 +118,33 @@ fn error_response(error: &dyn std::error::Error) -> ActionResponse {
         message: error.to_string(),
     }
 }
+
+// Create a middleware filter that tracks actions
+fn with_action_tracking(
+    action_name: &'static str,
+    action_tracker: Arc<RwLock<Option<LastAction>>>,
+) -> impl Filter<Extract = (), Error = Infallible> + Clone {
+    // Clone the Arc outside the closure so it's moved into the filter
+    let tracker = action_tracker.clone();
+    
+    warp::any()
+        .map(move || {
+            // Now use the tracker that was cloned outside the closure
+            if let Ok(mut last_action) = tracker.write() {
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                
+                *last_action = Some(LastAction {
+                    function: action_name.to_string(),
+                    timestamp: now,
+                });
+            }
+        })
+        .untuple_one()
+}
+
 
 //-----------------------------------------------------
 // ZFS MANAGER IMPLEMENTATION
@@ -473,6 +519,28 @@ async fn delete_dataset_handler(
 }
 
 //-----------------------------------------------------
+// MISC HANDLERS
+//-----------------------------------------------------
+
+// Health check handler
+async fn health_check_handler(
+    last_action: Arc<RwLock<Option<LastAction>>>,
+) -> Result<impl Reply, Rejection> {
+    let version = env!("CARGO_PKG_VERSION").to_string();
+    let last_action_data = if let Ok(action) = last_action.read() {
+        action.clone()
+    } else {
+        None
+    };
+    
+    Ok(warp::reply::json(&HealthResponse {
+        status: "ok".to_string(),
+        version,
+        last_action: last_action_data,
+    }))
+}
+
+//-----------------------------------------------------
 // MAIN FUNCTION
 //-----------------------------------------------------
 
@@ -489,11 +557,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a warp filter that injects the ZFS manager into route handlers
     let zfs = warp::any().map(move || zfs.clone());
 
+    // In your main function, add this near where you create the ZfsManager:
+    let last_action = Arc::new(RwLock::new(None::<LastAction>));
+
     // API key check filter - reusable middleware for authentication
     let api_key_check = warp::header::headers_cloned()
         .and(warp::any().map(move || api_key.clone()))
         .and_then(check_api_key);
 
+
+    let health_routes = {
+        let last_action_clone = last_action.clone();
+        // GET /health - Health check endpoint
+        warp::get()
+            .and(warp::path("health"))
+            .and(warp::path::end())
+            .and(warp::any().map(move || last_action_clone.clone()))
+            .and_then(health_check_handler)
+    };
 
     // Define pool-related routes
     let pool_routes = {
@@ -501,27 +582,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let list = warp::get()
             .and(warp::path("pools"))
             .and(warp::path::end())
+            .and(with_action_tracking("list_pools", last_action.clone()))
             .and(zfs.clone())
             .and(api_key_check.clone())
-            .and_then(|zfs: ZfsManager, _: ()| list_pools_handler(zfs));
+            .and_then(|zfs: ZfsManager, _| list_pools_handler(zfs));
 
         // GET /pools/{name} - Get pool status
         let status = warp::get()
             .and(warp::path("pools"))
             .and(warp::path::param())
             .and(warp::path::end())
+            .and(with_action_tracking("get_pool_status", last_action.clone()))
             .and(zfs.clone())
             .and(api_key_check.clone())
-            .and_then(|name: String, zfs: ZfsManager, _: ()| get_pool_status_handler(name, zfs));
+            .and_then(|name: String, zfs: ZfsManager, _| get_pool_status_handler(name, zfs));
 
         // POST /pools - Create a new pool
         let create = warp::post()
             .and(warp::path("pools"))
             .and(warp::path::end())
             .and(warp::body::json())
+            .and(with_action_tracking("create_pool", last_action.clone()))
             .and(zfs.clone())
             .and(api_key_check.clone())
-            .and_then(|body: CreatePool, zfs: ZfsManager, _: ()| create_pool_handler(body, zfs));
+            .and_then(|body: CreatePool, zfs: ZfsManager, _| create_pool_handler(body, zfs));
 
         // DELETE /pools/{name} - Destroy a pool
         // Query parameter ?force=true can be used for forced destruction
@@ -530,9 +614,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and(warp::path::param())
             .and(warp::path::end())
             .and(warp::query::<HashMap<String, String>>())
+            .and(with_action_tracking("delete_pool", last_action.clone()))
             .and(zfs.clone())
-            .and(api_key_check.clone())
-            .and_then(|name: String, query: HashMap<String, String>, zfs: ZfsManager, _: ()| {
+            .and(api_key_check.clone())    
+            .and_then(|name: String, query: HashMap<String, String>, zfs: ZfsManager, _| {
                 let force = query.get("force").map(|v| v == "true").unwrap_or(false);
                 destroy_pool_handler(name, force, zfs)
             });
@@ -547,27 +632,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let list = warp::get()
             .and(warp::path("snapshots"))
             .and(warp::path::param())
+            .and(with_action_tracking("list_snapshots", last_action.clone()))
             .and(zfs.clone())
-            .and(api_key_check.clone())
-            .and_then(|dataset: String, zfs: ZfsManager, _: ()| list_snapshots_handler(dataset, zfs));
+            .and(api_key_check.clone())    
+            .and_then(|dataset: String, zfs: ZfsManager, _| list_snapshots_handler(dataset, zfs));
 
         // POST /snapshots/{dataset} - Create snapshot
         let create = warp::post()
             .and(warp::path("snapshots"))
             .and(warp::path::param())
             .and(warp::body::json())
+            .and(with_action_tracking("create_snapshot", last_action.clone()))
             .and(zfs.clone())
             .and(api_key_check.clone())
-            .and_then(|dataset: String, body: CreateSnapshot, zfs: ZfsManager, _: ()| create_snapshot_handler(dataset, body, zfs));
+            .and_then(|dataset: String, body: CreateSnapshot, zfs: ZfsManager, _| create_snapshot_handler(dataset, body, zfs));
 
         // DELETE /snapshots/{dataset}/{snapshot_name} - Delete snapshot
         let delete = warp::delete()
             .and(warp::path("snapshots"))
             .and(warp::path::param())
             .and(warp::path::param())
+            .and(with_action_tracking("delete_snapshot", last_action.clone()))
             .and(zfs.clone())
             .and(api_key_check.clone())
-            .and_then(|dataset: String, snapshot_name: String, zfs: ZfsManager, _: ()| delete_snapshot_handler(dataset, snapshot_name, zfs));
+            .and_then(|dataset: String, snapshot_name: String, zfs: ZfsManager, _| delete_snapshot_handler(dataset, snapshot_name, zfs));
 
         // Combine all snapshot routes
         list.or(create).or(delete)
@@ -579,6 +667,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let list = warp::get()
             .and(warp::path("datasets"))
             .and(warp::path::param())
+            .and(with_action_tracking("list_datasets", last_action.clone()))
             .and(zfs.clone())
             .and(api_key_check.clone())
             .and_then(|pool: String, zfs: ZfsManager, _: ()| list_datasets_handler(pool, zfs));
@@ -587,6 +676,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let delete = warp::delete()
             .and(warp::path("datasets"))
             .and(warp::path::tail())
+            .and(with_action_tracking("delete_dataset", last_action.clone()))
             .and(zfs.clone())
             .and(api_key_check.clone())
             .and_then(|tail: warp::path::Tail, zfs: ZfsManager, _: ()| delete_dataset_handler(tail.as_str().to_string(), zfs));
@@ -595,6 +685,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let create = warp::post()
             .and(warp::path("datasets"))
             .and(warp::body::json())
+            .and(with_action_tracking("create_dataset", last_action.clone()))
             .and(zfs.clone())
             .and(api_key_check.clone())
             .and_then(|body: CreateDataset, zfs: ZfsManager, _: ()| create_dataset_handler(body, zfs));
@@ -604,7 +695,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Combine all routes
-    let routes = snapshot_routes.or(dataset_routes).or(pool_routes);
+    let routes = snapshot_routes.or(dataset_routes).or(pool_routes).or(health_routes);
 
     // Start the HTTP server
     println!("Server starting on port: 9876");

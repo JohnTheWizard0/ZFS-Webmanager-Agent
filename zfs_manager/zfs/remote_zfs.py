@@ -1,5 +1,6 @@
 # This is the library that communicates directly with the rust agent is used by other python applications!
 # For example "manage_zfs.py"
+# !!! MADE FOR VERSION 0.3.0 OF THE RUST AGENT !!!
 
 import requests
 from typing import Optional, Dict, Any, List, Tuple
@@ -130,6 +131,20 @@ class ZFSRemote:
         except requests.exceptions.RequestException as e:
             error_msg = e.response.text if hasattr(e, 'response') and hasattr(e.response, 'text') else str(e)
             raise OperationError(f"Operation failed: {error_msg}")
+
+    #-------------------------------------------------
+    # Misc Methods
+    #-------------------------------------------------
+
+    def check_health(self) -> dict:
+        try:
+            response = self._make_request('GET', 'health')
+            self.logger.debug(f"Health check result: {response}")
+            return response
+        except OperationError as e:
+            # Convert operation errors during health checks to connection errors
+            # since they likely indicate the service is not working properly
+            raise ConnectionError(f"Health check failed: {e}")
 
     #-------------------------------------------------
     # Pool Management Methods
