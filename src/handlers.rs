@@ -2,8 +2,15 @@
 // POOL HANDLERS
 //-----------------------------------------------------
 
+use warp::{Reply, Rejection, Filter};
+use crate::zfs_management::ZfsManager;
+use crate::models::*;
+use std::sync::{Arc, RwLock};
+use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 // List all pools
-async fn list_pools_handler(
+pub async fn list_pools_handler(
     zfs: ZfsManager,
 ) -> Result<impl Reply, Rejection> {
     match zfs.list_pools().await {
@@ -19,7 +26,7 @@ async fn list_pools_handler(
 }
 
 // Get pool status
-async fn get_pool_status_handler(
+pub async fn get_pool_status_handler(
     name: String,
     zfs: ZfsManager,
 ) -> Result<impl Reply, Rejection> {
@@ -33,7 +40,7 @@ async fn get_pool_status_handler(
 }
 
 // Create a new pool
-async fn create_pool_handler(
+pub async fn create_pool_handler(
     body: CreatePool,
     zfs: ZfsManager,
 ) -> Result<impl Reply, Rejection> {
@@ -50,7 +57,7 @@ async fn create_pool_handler(
 }
 
 // Destroy a pool
-async fn destroy_pool_handler(
+pub async fn destroy_pool_handler(
     name: String,
     force: bool,
     zfs: ZfsManager,
@@ -71,7 +78,7 @@ async fn destroy_pool_handler(
 // SNAPSHOT HANDLERS
 //-----------------------------------------------------
 
-async fn list_snapshots_handler(
+pub async fn list_snapshots_handler(
     dataset: String,
     zfs: ZfsManager,
 ) -> Result<impl Reply, Rejection> {
@@ -87,7 +94,7 @@ async fn list_snapshots_handler(
     }
 }
 
-async fn create_snapshot_handler(
+pub async fn create_snapshot_handler(
     dataset: String,
     body: CreateSnapshot,
     zfs: ZfsManager,
@@ -98,7 +105,7 @@ async fn create_snapshot_handler(
     }
 }
 
-async fn delete_snapshot_handler(
+pub async fn delete_snapshot_handler(
     dataset: String,
     snapshot_name: String,
     zfs: ZfsManager,
@@ -113,7 +120,7 @@ async fn delete_snapshot_handler(
 // DATASET HANDLERS
 //-----------------------------------------------------
 
-async fn list_datasets_handler(
+pub async fn list_datasets_handler(
     pool: String,
     zfs: ZfsManager,
 ) -> Result<impl Reply, Rejection> {
@@ -126,7 +133,7 @@ async fn list_datasets_handler(
     }
 }
 
-async fn create_dataset_handler(
+pub async fn create_dataset_handler(
     body: CreateDataset,
     zfs: ZfsManager,
 ) -> Result<impl Reply, Rejection> {
@@ -136,7 +143,7 @@ async fn create_dataset_handler(
     }
 }
 
-async fn delete_dataset_handler(
+pub async fn delete_dataset_handler(
     name: String,
     zfs: ZfsManager,
 ) -> Result<impl Reply, Rejection> {
@@ -151,7 +158,7 @@ async fn delete_dataset_handler(
 //-----------------------------------------------------
 
 // Health check handler
-async fn health_check_handler(
+pub async fn health_check_handler(
     last_action: Arc<RwLock<Option<LastAction>>>,
 ) -> Result<impl Reply, Rejection> {
     let version = env!("CARGO_PKG_VERSION").to_string();
@@ -169,7 +176,7 @@ async fn health_check_handler(
 }
 
 // Add this handler function for the API endpoint
-async fn execute_command_handler(
+pub async fn execute_command_handler(
     body: CommandRequest,
     last_action: Arc<RwLock<Option<LastAction>>>,
 ) -> Result<impl Reply, Rejection> {

@@ -2,25 +2,19 @@
 // ZFS MANAGER IMPLEMENTATION
 //-----------------------------------------------------
 
-// Import ZFS related functionality from libzetta
-use libzetta::zfs::{
-    DelegatingZfsEngine, ZfsEngine, CreateDatasetRequest, DatasetKind
-};
-// Import additional ZPool functionality from libzetta
-use libzetta::zpool::{
-    ZpoolEngine, ZpoolOpen3, CreateZpoolRequest, CreateVdevRequest, 
-    CreateMode, DestroyMode
-};
-
+// zfs_management.rs
+use std::sync::Arc;
+use libzetta::zfs::{DelegatingZfsEngine, ZfsEngine};
+use libzetta::zpool::{ZpoolEngine, ZpoolOpen3};
 use std::path::PathBuf;
 
 #[derive(Clone)]
-struct ZfsManager {
+pub struct ZfsManager {
     engine: Arc<DelegatingZfsEngine>,
 }
 
 impl ZfsManager {
-    fn new() -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         Ok(ZfsManager {
             engine: Arc::new(DelegatingZfsEngine::new()?),
         })

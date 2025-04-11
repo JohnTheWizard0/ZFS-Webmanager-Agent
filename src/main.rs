@@ -4,28 +4,12 @@ mod models;
 mod utils;
 mod zfs_management;
 
-// Import required modules from the Warp web framework for creating HTTP endpoints
 use warp::{Filter, Rejection, Reply};
-// Import ZFS related functionality from libzetta
-use libzetta::zfs::{
-    DelegatingZfsEngine, ZfsEngine, CreateDatasetRequest, DatasetKind
-};
-// Import additional ZPool functionality from libzetta
-use libzetta::zpool::{
-    ZpoolEngine, ZpoolOpen3, CreateZpoolRequest, CreateVdevRequest, 
-    CreateMode, DestroyMode
-};
-// Standard library imports
-use std::sync::Arc;
-use tokio;
-use std::path::PathBuf;
-use std::collections::HashMap;
-use std::io::Write;
-use rand::Rng;
-use std::sync::RwLock;
-use std::time::{SystemTime, UNIX_EPOCH};
-use std::convert::Infallible;
-use std::process::Command;
+use std::sync::{Arc, RwLock};
+use zfs_management::ZfsManager;
+use models::LastAction;
+use handlers::*; // Import all handlers
+use auth::*;
 
 
 //-----------------------------------------------------

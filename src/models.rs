@@ -3,16 +3,18 @@
 //-----------------------------------------------------
 
 use serde::{Deserialize, Serialize};
+use std::time::SystemTime;
+use std::collections::HashMap;
 
 // Add these data structures for the Linux command API
 #[derive(Deserialize)]
-struct CommandRequest {
+pub struct CommandRequest {
     command: String,
     args: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
-struct CommandResponse {
+pub struct CommandResponse {
     status: String,
     output: String,
     exit_code: Option<i32>,
@@ -20,14 +22,14 @@ struct CommandResponse {
 
 // Define a struct to track the last action
 #[derive(Clone, Serialize)]
-struct LastAction {
+pub struct LastAction {
     function: String,
     timestamp: u64,
 }
 
 // Define the health response struct
 #[derive(Serialize)]
-struct HealthResponse {
+pub struct HealthResponse {
     status: String,
     version: String,
     last_action: Option<LastAction>,
@@ -35,39 +37,39 @@ struct HealthResponse {
 
 // Response structures
 #[derive(Serialize)]
-struct ListResponse {
+pub struct ListResponse {
     snapshots: Vec<String>,
     status: String,
 }
 
 #[derive(Serialize)]
-struct ActionResponse {
+pub struct ActionResponse {
     status: String,
     message: String,
 }
 
 #[derive(Deserialize)]
-struct CreateSnapshot {
+pub struct CreateSnapshot {
     snapshot_name: String,
 }
 
 // Dataset structures
 #[derive(Deserialize)]
-struct CreateDataset {
+pub struct CreateDataset {
     name: String,
     kind: String,  // "filesystem" or "volume"
     properties: Option<HashMap<String, String>>,
 }
 
 #[derive(Serialize)]
-struct DatasetResponse {
+pub struct DatasetResponse {
     datasets: Vec<String>,
     status: String,
 }
 
 // Pool status response
 #[derive(Serialize)]
-struct PoolStatus {
+pub struct PoolStatus {
     name: String,
     health: String,
     size: u64,
@@ -80,14 +82,14 @@ struct PoolStatus {
 
 // Pool list response
 #[derive(Serialize)]
-struct PoolListResponse {
+pub struct PoolListResponse {
     pools: Vec<String>,
     status: String,
 }
 
 // Pool creation request
 #[derive(Deserialize)]
-struct CreatePool {
+pub struct CreatePool {
     name: String,
     disks: Vec<String>,
     raid_type: Option<String>, // "mirror", "raidz", "raidz2", "raidz3", or null for individual disks
