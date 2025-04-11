@@ -2,16 +2,6 @@
 // POOL HANDLERS
 //-----------------------------------------------------
 
-// Import ZFS related functionality from libzetta
-use libzetta::zfs::{
-    DelegatingZfsEngine, ZfsEngine, CreateDatasetRequest, DatasetKind
-};
-// Import additional ZPool functionality from libzetta
-use libzetta::zpool::{
-    ZpoolEngine, ZpoolOpen3, CreateZpoolRequest, CreateVdevRequest, 
-    CreateMode, DestroyMode
-};
-
 // List all pools
 async fn list_pools_handler(
     zfs: ZfsManager,
