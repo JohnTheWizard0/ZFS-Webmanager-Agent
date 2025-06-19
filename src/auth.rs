@@ -4,7 +4,7 @@
 
 use std::convert::Infallible;
 use warp::{http::HeaderMap, Rejection};
-use std::fs::{File, OpenOptions};
+use std::fs;
 use std::io::{Read, Write};
 use rand::{thread_rng, Rng};
 use rand::distributions::Alphanumeric;

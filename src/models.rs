@@ -8,13 +8,13 @@ use std::collections::HashMap;
 
 // Add these data structures for the Linux command API
 #[derive(Deserialize)]
-pub struct CommandRequest {
+struct CommandRequest {
     command: String,
     args: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
-pub struct CommandResponse {
+struct CommandResponse {
     status: String,
     output: String,
     exit_code: Option<i32>,
@@ -22,14 +22,14 @@ pub struct CommandResponse {
 
 // Define a struct to track the last action
 #[derive(Clone, Serialize)]
-pub struct LastAction {
+struct LastAction {
     function: String,
     timestamp: u64,
 }
 
 // Define the health response struct
 #[derive(Serialize)]
-pub struct HealthResponse {
+struct HealthResponse {
     status: String,
     version: String,
     last_action: Option<LastAction>,
@@ -37,39 +37,39 @@ pub struct HealthResponse {
 
 // Response structures
 #[derive(Serialize)]
-pub struct ListResponse {
+struct ListResponse {
     snapshots: Vec<String>,
     status: String,
 }
 
 #[derive(Serialize)]
-pub struct ActionResponse {
+struct ActionResponse {
     status: String,
     message: String,
 }
 
 #[derive(Deserialize)]
-pub struct CreateSnapshot {
+struct CreateSnapshot {
     snapshot_name: String,
 }
 
 // Dataset structures
 #[derive(Deserialize)]
-pub struct CreateDataset {
+struct CreateDataset {
     name: String,
     kind: String,  // "filesystem" or "volume"
     properties: Option<HashMap<String, String>>,
 }
 
 #[derive(Serialize)]
-pub struct DatasetResponse {
+struct DatasetResponse {
     datasets: Vec<String>,
     status: String,
 }
 
 // Pool status response
 #[derive(Serialize)]
-pub struct PoolStatus {
+struct PoolStatus {
     name: String,
     health: String,
     size: u64,
@@ -82,14 +82,14 @@ pub struct PoolStatus {
 
 // Pool list response
 #[derive(Serialize)]
-pub struct PoolListResponse {
+struct PoolListResponse {
     pools: Vec<String>,
     status: String,
 }
 
 // Pool creation request
 #[derive(Deserialize)]
-pub struct CreatePool {
+struct CreatePool {
     name: String,
     disks: Vec<String>,
     raid_type: Option<String>, // "mirror", "raidz", "raidz2", "raidz3", or null for individual disks

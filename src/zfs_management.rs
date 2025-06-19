@@ -4,9 +4,10 @@
 
 // zfs_management.rs
 use std::sync::Arc;
-use libzetta::zfs::{DelegatingZfsEngine, ZfsEngine};
-use libzetta::zpool::{ZpoolEngine, ZpoolOpen3};
+use libzetta::zfs::{ZfsEngine, DatasetKind};
+use libzetta::zpool::{ZpoolEngine, ZpoolOpen3, Health, FailMode};
 use std::path::PathBuf;
+use std::collections::HashMap;
 
 #[derive(Clone)]
 pub struct ZfsManager {
@@ -21,7 +22,7 @@ impl ZfsManager {
     }
 
     // List all available pools
-    async fn list_pools(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    pub async fn list_pools(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         // Use ZpoolOpen3 for zpool operations
         let zpool_engine = ZpoolOpen3::default();
         
@@ -37,7 +38,7 @@ impl ZfsManager {
     }
 
     // Fixed get_pool_status method with proper type handling
-    async fn get_pool_status(&self, name: &str) -> Result<PoolStatus, Box<dyn std::error::Error>> {
+    pub async fn get_pool_status(&self, name: &str) -> Result<PoolStatus, Box<dyn std::error::Error>> {
         let zpool_engine = ZpoolOpen3::default();
         
         // Check if pool exists
@@ -66,7 +67,7 @@ impl ZfsManager {
     }
 
     // Create a new pool
-    async fn create_pool(&self, request: CreatePool) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn create_pool(&self, request: CreatePool) -> Result<(), Box<dyn std::error::Error>> {
         let zpool_engine = ZpoolOpen3::default();
         
         // Check if pool already exists
@@ -122,7 +123,7 @@ impl ZfsManager {
     }
 
     // Destroy an existing pool
-    async fn destroy_pool(&self, name: &str, force: bool) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn destroy_pool(&self, name: &str, force: bool) -> Result<(), Box<dyn std::error::Error>> {
         let zpool_engine = ZpoolOpen3::default();
         
         // Check if pool exists
@@ -143,7 +144,7 @@ impl ZfsManager {
         Ok(())
     }
 
-    async fn list_snapshots(&self, dataset: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    pub async fn list_snapshots(&self, dataset: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let snapshots = self.engine.list_snapshots(dataset)?;
         Ok(snapshots
             .into_iter()
@@ -151,19 +152,19 @@ impl ZfsManager {
             .collect())
     }
 
-    async fn create_snapshot(&self, dataset: &str, snapshot_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn create_snapshot(&self, dataset: &str, snapshot_name: &str) -> Result<(), Box<dyn std::error::Error>> {
         let full_path = PathBuf::from(format!("{}@{}", dataset, snapshot_name));
         self.engine.snapshot(&[full_path], None)?;
         Ok(())
     }
 
-    async fn delete_snapshot(&self, dataset: &str, snapshot_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn delete_snapshot(&self, dataset: &str, snapshot_name: &str) -> Result<(), Box<dyn std::error::Error>> {
         let full_path = PathBuf::from(format!("{}@{}", dataset, snapshot_name));
         self.engine.destroy(full_path)?;
         Ok(())
     }
 
-    async fn list_datasets(&self, pool: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    pub async fn list_datasets(&self, pool: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let datasets = self.engine.list_filesystems(pool)?;
         Ok(datasets
             .into_iter()
@@ -171,7 +172,7 @@ impl ZfsManager {
             .collect())
     }
 
-    async fn create_dataset(&self, request: CreateDataset) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn create_dataset(&self, request: CreateDataset) -> Result<(), Box<dyn std::error::Error>> {
         let kind = match request.kind.to_lowercase().as_str() {
             "filesystem" => DatasetKind::Filesystem,
             "volume" => DatasetKind::Volume,
@@ -188,7 +189,7 @@ impl ZfsManager {
         Ok(())
     }    
 
-    async fn delete_dataset(&self, name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn delete_dataset(&self, name: &str) -> Result<(), Box<dyn std::error::Error>> {
         self.engine.destroy(name)?;
         Ok(())
     }

@@ -2,15 +2,23 @@
 // HELPER FUNCTIONS
 //-----------------------------------------------------
 
+// Define the health response struct
+#[derive(Serialize)]
+struct HealthResponse {
+    status: String,
+    version: String,
+    last_action: Option<LastAction>,
+}
+
 // Helper functions for response generation
-fn success_response(message: &str) -> ActionResponse {
+pub fn success_response(message: &str) -> ActionResponse {
     ActionResponse {
         status: "success".to_string(),
         message: message.to_string(),
     }
 }
 
-fn error_response(error: &dyn std::error::Error) -> ActionResponse {
+pub fn error_response(error: &dyn std::error::Error) -> ActionResponse {
     ActionResponse {
         status: "error".to_string(),
         message: error.to_string(),
@@ -18,7 +26,7 @@ fn error_response(error: &dyn std::error::Error) -> ActionResponse {
 }
 
 // Create a middleware filter that tracks actions
-fn with_action_tracking(
+pub fn with_action_tracking(
     action_name: &'static str,
     action_tracker: Arc<RwLock<Option<LastAction>>>,
 ) -> impl Filter<Extract = (), Error = Infallible> + Clone {
@@ -44,7 +52,7 @@ fn with_action_tracking(
 }
 
 // Add this function to execute Linux commands
-fn execute_linux_command(command: &str, args: &[&str]) -> Result<(String, Option<i32>), std::io::Error> {
+pub fn execute_linux_command(command: &str, args: &[&str]) -> Result<(String, Option<i32>), std::io::Error> {
     // Create a new Command instance
     let output = Command::new(command)
         .args(args)
