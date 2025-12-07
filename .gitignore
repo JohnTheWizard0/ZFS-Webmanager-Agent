@@ -2,3 +2,9 @@
 /.vscode
 /.vscode/launch.json
 /.zfswm_api
+
+# Agent workspace (local only)
+/_resources/
+/CLAUDE.md
+/project.md
+/.claude/
