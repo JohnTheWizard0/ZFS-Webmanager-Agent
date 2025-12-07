@@ -4,6 +4,10 @@ use libzetta::zfs::{ZfsEngine, DelegatingZfsEngine, CreateDatasetRequest, Datase
 use std::path::PathBuf;
 use std::sync::Arc;
 
+// libzfs for scan stats (from-scratch implementation)
+// libzetta doesn't expose scan progress, so we use libzfs FFI bindings directly
+use libzfs::Libzfs;
+
 pub struct PoolStatus {
     pub name: String,
     pub health: String,
@@ -208,34 +212,104 @@ impl ZfsManager {
     }
 
     /// Get scrub status from pool info
-    /// NOTE: libzetta parses scan_line but doesn't expose it in Zpool struct.
-    /// We return what's available: pool health and error info.
-    /// Detailed scan progress (percent, bytes examined) not available via libzetta.
+    /// FROM-SCRATCH IMPLEMENTATION using libzfs FFI bindings
+    /// Bypasses libzetta limitation by accessing pool config nvlist directly.
+    /// Extracts scan_stats array per pool_scan_stat_t in sys/fs/zfs.h
     pub async fn get_scrub_status(&self, pool: &str) -> Result<ScrubStatus, ZfsError> {
+        // Get pool health via libzetta (still useful for that)
         let status_options = libzetta::zpool::open3::StatusOptions::default();
-        let zpool = self.zpool_engine.status(pool, status_options)
+        let zpool_status = self.zpool_engine.status(pool, status_options)
             .map_err(|e| format!("Failed to get pool status: {}", e))?;
 
-        // libzetta limitation: scan progress not exposed
-        // Return pool-level info that IS available
-        Ok(ScrubStatus {
-            pool_health: format!("{:?}", zpool.health()),
-            errors: zpool.errors().clone(),
-            // Detailed scan fields unavailable via libzetta
-            state: "unknown".to_string(),
-            function: None,
-            start_time: None,
-            end_time: None,
-            to_examine: None,
-            examined: None,
-            scan_errors: None,
-        })
+        let pool_health = format!("{:?}", zpool_status.health());
+        let errors = zpool_status.errors().clone();
+
+        // FROM-SCRATCH: Use libzfs to get actual scan stats from pool config
+        let mut libzfs = Libzfs::new();
+        let zpool = libzfs.pool_by_name(pool)
+            .ok_or_else(|| format!("Pool '{}' not found via libzfs", pool))?;
+
+        // Get pool config nvlist
+        let config = zpool.get_config();
+
+        // scan_stats is inside vdev_tree (nvroot) per ZFS docs:
+        // nvlist_lookup_uint64_array(nvroot, ZPOOL_CONFIG_SCAN_STATS, &stats, &nelem)
+        // Try vdev_tree first, fall back to pool config root
+        let scan_stats = config.lookup_nv_list("vdev_tree")
+            .and_then(|vdev_tree| vdev_tree.lookup_uint64_array("scan_stats"))
+            .or_else(|_| config.lookup_uint64_array("scan_stats"));
+
+        // scan_stats is a uint64 array with fields from pool_scan_stat_t
+        // Indices: 0=func, 1=state, 2=start_time, 3=end_time, 4=to_examine,
+        //          5=examined, 6=skipped, 7=processed, 8=errors, ...
+
+        match scan_stats {
+            Ok(stats) if !stats.is_empty() => {
+                let pss_func = stats.get(0).copied();
+                let pss_state = stats.get(1).copied();
+                let pss_start_time = stats.get(2).copied();
+                let pss_end_time = stats.get(3).copied();
+                let pss_to_examine = stats.get(4).copied();
+                let pss_examined = stats.get(5).copied();
+                let pss_errors = stats.get(8).copied();
+
+                Ok(ScrubStatus {
+                    pool_health,
+                    errors,
+                    state: scan_state_to_string(pss_state),
+                    function: scan_func_to_string(pss_func),
+                    start_time: pss_start_time,
+                    end_time: pss_end_time,
+                    to_examine: pss_to_examine,
+                    examined: pss_examined,
+                    scan_errors: pss_errors,
+                })
+            }
+            _ => {
+                // No scan stats available (never scanned)
+                Ok(ScrubStatus {
+                    pool_health,
+                    errors,
+                    state: "none".to_string(),
+                    function: None,
+                    start_time: None,
+                    end_time: None,
+                    to_examine: None,
+                    examined: None,
+                    scan_errors: None,
+                })
+            }
+        }
+    }
+}
+
+/// Convert dsl_scan_state_t to string
+/// DSS_NONE=0, DSS_SCANNING=1, DSS_FINISHED=2, DSS_CANCELED=3
+fn scan_state_to_string(state: Option<u64>) -> String {
+    match state {
+        Some(0) => "none".to_string(),
+        Some(1) => "scanning".to_string(),
+        Some(2) => "finished".to_string(),
+        Some(3) => "canceled".to_string(),
+        _ => "unknown".to_string(),
+    }
+}
+
+/// Convert pool_scan_func_t to string
+/// POOL_SCAN_NONE=0, POOL_SCAN_SCRUB=1, POOL_SCAN_RESILVER=2, POOL_SCAN_ERRORSCRUB=3
+fn scan_func_to_string(func: Option<u64>) -> Option<String> {
+    match func {
+        Some(0) => None,
+        Some(1) => Some("scrub".to_string()),
+        Some(2) => Some("resilver".to_string()),
+        Some(3) => Some("errorscrub".to_string()),
+        _ => None,
     }
 }
 
 /// Scrub status information
-/// NOTE: Detailed scan progress not available via libzetta (limitation).
-/// Only pool_health and errors are populated. Other fields reserved for future.
+/// FROM-SCRATCH implementation using libzfs FFI bindings.
+/// Extracts real scan progress from pool_scan_stat_t via nvlist.
 pub struct ScrubStatus {
     pub pool_health: String,
     pub errors: Option<String>,

@@ -98,18 +98,23 @@ pub struct CommandRequest {
 }
 
 // Scrub status response
-// NOTE: Detailed scan progress not available via libzetta (limitation).
+// FROM-SCRATCH implementation using libzfs FFI bindings.
+// Extracts real scan progress from pool_scan_stat_t via nvlist.
 #[derive(Debug, Serialize)]
 pub struct ScrubStatusResponse {
     pub status: String,
     pub pool: String,
     pub pool_health: String,
     pub pool_errors: Option<String>,
-    // Scan details (reserved for future - libzetta doesn't expose these)
-    pub scan_state: String,
-    pub scan_function: Option<String>,
-    pub scan_errors: Option<u64>,
-    pub percent_done: Option<f64>,
+    // Scan details from pool_scan_stat_t
+    pub scan_state: String,           // none, scanning, finished, canceled
+    pub scan_function: Option<String>, // scrub, resilver, errorscrub
+    pub start_time: Option<u64>,       // Unix timestamp
+    pub end_time: Option<u64>,         // Unix timestamp (if finished)
+    pub to_examine: Option<u64>,       // Total bytes to scan
+    pub examined: Option<u64>,         // Bytes scanned so far
+    pub scan_errors: Option<u64>,      // Errors encountered
+    pub percent_done: Option<f64>,     // Calculated: (examined / to_examine) * 100
 }
 
 // ============================================================================

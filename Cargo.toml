@@ -11,4 +11,5 @@ serde_json = "1.0"
 uuid = { version = "1.0", features = ["v4"] }
 rand = "0.8"
 libzetta = "0.5.0"
+libzfs = "0.6.16"
 dirs = "5.0"

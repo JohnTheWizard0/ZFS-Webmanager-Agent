@@ -179,10 +179,20 @@ pub async fn stop_scrub_handler(pool: String, zfs: ZfsManager) -> Result<impl Re
 }
 
 /// Get scrub status for the pool
-/// NOTE: libzetta doesn't expose detailed scan progress. Only pool health available.
+/// FROM-SCRATCH implementation using libzfs FFI bindings.
+/// Returns actual scan progress extracted from pool_scan_stat_t.
 pub async fn get_scrub_status_handler(pool: String, zfs: ZfsManager) -> Result<impl Reply, Rejection> {
     match zfs.get_scrub_status(&pool).await {
         Ok(scrub) => {
+            // Calculate percent_done: (examined / to_examine) * 100
+            // Per ZFS docs: check state == finished rather than percent == 100
+            let percent_done = match (scrub.examined, scrub.to_examine) {
+                (Some(examined), Some(to_examine)) if to_examine > 0 => {
+                    Some((examined as f64 / to_examine as f64) * 100.0)
+                }
+                _ => None,
+            };
+
             Ok(success_response(ScrubStatusResponse {
                 status: "success".to_string(),
                 pool: pool.clone(),
@@ -190,8 +200,12 @@ pub async fn get_scrub_status_handler(pool: String, zfs: ZfsManager) -> Result<i
                 pool_errors: scrub.errors,
                 scan_state: scrub.state,
                 scan_function: scrub.function,
+                start_time: scrub.start_time,
+                end_time: scrub.end_time,
+                to_examine: scrub.to_examine,
+                examined: scrub.examined,
                 scan_errors: scrub.scan_errors,
-                percent_done: None, // Not available via libzetta
+                percent_done,
             }))
         }
         Err(e) => Ok(error_response(&format!("Failed to get scrub status: {}", e))),
