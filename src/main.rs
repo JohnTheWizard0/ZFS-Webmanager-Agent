@@ -372,6 +372,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let create = warp::post()
             .and(warp::path("datasets"))
+            .and(warp::path::end())
             .and(warp::body::json())
             .and(with_action_tracking("create_dataset", last_action.clone()))
             .and(zfs.clone())
@@ -481,15 +482,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Combine all API routes under /v1
+    // IMPORTANT: Route order matters for warp body consumption!
+    // Routes with path::end() + body::json() must come BEFORE routes with path::tail() + body::json()
+    // because path::tail() is greedy and will consume the body before path::end() routes can match.
+    // Order:
+    // 1. dataset_routes (POST /datasets with path::end()) before task_routes (POST /datasets/{path}/receive)
+    // 2. snapshot_routes (POST /snapshots/{tail}) before task_routes (POST /snapshots/{tail}/send)
     let v1_routes = warp::path("v1").and(
         health_routes
             .or(docs_route)
             .or(openapi_route)
             .or(zfs_features_route)
             .or(pool_routes)
-            .or(task_routes)
-            .or(snapshot_routes)
             .or(dataset_routes)
+            .or(snapshot_routes)
+            .or(task_routes)
             .or(command_routes)
     );
 

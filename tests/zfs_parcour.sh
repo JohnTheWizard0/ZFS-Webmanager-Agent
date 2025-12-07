@@ -25,9 +25,10 @@
 set -euo pipefail
 
 # Configuration
-API_URL="${API_URL:-http://localhost:3000}"
-API_KEY="${API_KEY:-}"
+API_URL="${API_URL:-http://localhost:9876}"
+API_KEY="${API_KEY:-08670612-43df-4a0c-a556-2288457726a5}"
 CLEANUP="${CLEANUP:-true}"
+SERVICE_NAME="zfs-agent"
 
 # Test resources
 TEST_POOL="zfs_parcour_test_pool"
@@ -112,6 +113,35 @@ json_field() {
 }
 
 # ==============================================================================
+# Service Management
+# ==============================================================================
+
+start_service() {
+    log_header "SERVICE STARTUP"
+    log_test "Starting $SERVICE_NAME service"
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
+        log_info "Service already running, restarting..."
+        systemctl restart "$SERVICE_NAME"
+    else
+        systemctl start "$SERVICE_NAME"
+    fi
+    sleep 2
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
+        log_pass
+    else
+        log_fail "Failed to start $SERVICE_NAME"
+        exit 2
+    fi
+}
+
+stop_service() {
+    log_header "SERVICE SHUTDOWN"
+    log_test "Stopping $SERVICE_NAME service"
+    systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+    log_pass
+}
+
+# ==============================================================================
 # Prerequisites Check
 # ==============================================================================
 
@@ -129,7 +159,7 @@ check_prerequisites() {
 
     # Check server reachable
     log_test "API server reachable at $API_URL"
-    if curl -s --connect-timeout 5 "${API_URL}/health" > /dev/null 2>&1; then
+    if curl -s --connect-timeout 5 "${API_URL}/v1/health" > /dev/null 2>&1; then
         log_pass
     else
         log_fail "Server not responding at $API_URL"
@@ -139,7 +169,7 @@ check_prerequisites() {
     # Check API key if required
     log_test "API authentication"
     local response
-    response=$(api GET "/health")
+    response=$(api GET "/v1/health")
     if is_success "$response"; then
         log_pass
     else
@@ -223,7 +253,7 @@ test_health_endpoint() {
 
     log_test "GET /health returns status and version"
     local response
-    response=$(api GET "/health")
+    response=$(api GET "/v1/health")
 
     if is_success "$response"; then
         local version
@@ -249,7 +279,7 @@ EOF
 )
 
     local response
-    response=$(api POST "/pools" "$payload")
+    response=$(api POST "/v1/pools" "$payload")
 
     if is_success "$response"; then
         log_pass
@@ -271,7 +301,7 @@ test_pool_status() {
 
     log_test "GET /pools/$TEST_POOL - retrieve status"
     local response
-    response=$(api GET "/pools/$TEST_POOL")
+    response=$(api GET "/v1/pools/$TEST_POOL")
 
     if is_success "$response"; then
         local health
@@ -288,7 +318,7 @@ test_pool_list() {
 
     log_test "GET /pools - list all pools"
     local response
-    response=$(api GET "/pools")
+    response=$(api GET "/v1/pools")
 
     if is_success "$response"; then
         if echo "$response" | grep -q "$TEST_POOL"; then
@@ -316,7 +346,7 @@ EOF
 )
 
     local response
-    response=$(api POST "/datasets" "$payload")
+    response=$(api POST "/v1/datasets" "$payload")
 
     if is_success "$response"; then
         log_pass
@@ -338,7 +368,7 @@ test_dataset_list() {
 
     log_test "GET /datasets/$TEST_POOL - list datasets"
     local response
-    response=$(api GET "/datasets/$TEST_POOL")
+    response=$(api GET "/v1/datasets/$TEST_POOL")
 
     if is_success "$response"; then
         if echo "$response" | grep -q "$TEST_DATASET"; then
@@ -365,7 +395,7 @@ EOF
 )
 
     local response
-    response=$(api POST "/snapshots/$TEST_POOL/$TEST_DATASET" "$payload")
+    response=$(api POST "/v1/snapshots/$TEST_POOL/$TEST_DATASET" "$payload")
 
     if is_success "$response"; then
         log_pass
@@ -387,7 +417,7 @@ test_snapshot_list() {
 
     log_test "GET /snapshots/$TEST_POOL/$TEST_DATASET - list snapshots"
     local response
-    response=$(api GET "/snapshots/$TEST_POOL/$TEST_DATASET")
+    response=$(api GET "/v1/snapshots/$TEST_POOL/$TEST_DATASET")
 
     if is_success "$response"; then
         if echo "$response" | grep -q "$TEST_SNAPSHOT"; then
@@ -406,7 +436,7 @@ test_snapshot_delete() {
 
     log_test "DELETE /snapshots/$TEST_POOL/$TEST_DATASET/$TEST_SNAPSHOT"
     local response
-    response=$(api DELETE "/snapshots/$TEST_POOL/$TEST_DATASET/$TEST_SNAPSHOT")
+    response=$(api DELETE "/v1/snapshots/$TEST_POOL/$TEST_DATASET/$TEST_SNAPSHOT")
 
     if is_success "$response"; then
         log_pass
@@ -428,7 +458,7 @@ test_dataset_delete() {
 
     log_test "DELETE /datasets/$TEST_POOL/$TEST_DATASET"
     local response
-    response=$(api DELETE "/datasets/$TEST_POOL/$TEST_DATASET")
+    response=$(api DELETE "/v1/datasets/$TEST_POOL/$TEST_DATASET")
 
     if is_success "$response"; then
         log_pass
@@ -450,7 +480,7 @@ test_scrub_start() {
 
     log_test "POST /pools/$TEST_POOL/scrub - start scrub"
     local response
-    response=$(api POST "/pools/$TEST_POOL/scrub")
+    response=$(api POST "/v1/pools/$TEST_POOL/scrub")
 
     if is_success "$response"; then
         log_pass
@@ -470,7 +500,7 @@ test_scrub_status() {
 
     log_test "GET /pools/$TEST_POOL/scrub - get status"
     local response
-    response=$(api GET "/pools/$TEST_POOL/scrub")
+    response=$(api GET "/v1/pools/$TEST_POOL/scrub")
 
     if is_success "$response"; then
         local health
@@ -487,7 +517,7 @@ test_scrub_stop() {
 
     log_test "POST /pools/$TEST_POOL/scrub/stop - stop scrub"
     local response
-    response=$(api POST "/pools/$TEST_POOL/scrub/stop")
+    response=$(api POST "/v1/pools/$TEST_POOL/scrub/stop")
 
     if is_success "$response"; then
         log_pass
@@ -506,7 +536,7 @@ test_pool_destroy() {
 
     log_test "DELETE /pools/$TEST_POOL"
     local response
-    response=$(api DELETE "/pools/$TEST_POOL")
+    response=$(api DELETE "/v1/pools/$TEST_POOL")
 
     if is_success "$response"; then
         log_pass
@@ -535,6 +565,12 @@ main() {
     echo "API URL: $API_URL"
     echo "Test Pool: $TEST_POOL"
     echo ""
+
+    # Start service
+    start_service
+
+    # Trap to ensure cleanup on exit
+    trap 'cleanup; stop_service' EXIT
 
     check_prerequisites
     setup_test_environment
