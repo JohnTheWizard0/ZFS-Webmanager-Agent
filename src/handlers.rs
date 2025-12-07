@@ -141,6 +141,63 @@ pub async fn delete_dataset_handler(name: String, zfs: ZfsManager) -> Result<imp
     }
 }
 
+// =========================================================================
+// Scrub Handlers (MF-001 Phase 2)
+// =========================================================================
+
+/// Start a scrub on the pool
+pub async fn start_scrub_handler(pool: String, zfs: ZfsManager) -> Result<impl Reply, Rejection> {
+    match zfs.start_scrub(&pool).await {
+        Ok(_) => Ok(success_response(ActionResponse {
+            status: "success".to_string(),
+            message: format!("Scrub started on pool '{}'", pool),
+        })),
+        Err(e) => Ok(error_response(&format!("Failed to start scrub: {}", e))),
+    }
+}
+
+/// Pause a scrub on the pool
+pub async fn pause_scrub_handler(pool: String, zfs: ZfsManager) -> Result<impl Reply, Rejection> {
+    match zfs.pause_scrub(&pool).await {
+        Ok(_) => Ok(success_response(ActionResponse {
+            status: "success".to_string(),
+            message: format!("Scrub paused on pool '{}'", pool),
+        })),
+        Err(e) => Ok(error_response(&format!("Failed to pause scrub: {}", e))),
+    }
+}
+
+/// Stop a scrub on the pool
+pub async fn stop_scrub_handler(pool: String, zfs: ZfsManager) -> Result<impl Reply, Rejection> {
+    match zfs.stop_scrub(&pool).await {
+        Ok(_) => Ok(success_response(ActionResponse {
+            status: "success".to_string(),
+            message: format!("Scrub stopped on pool '{}'", pool),
+        })),
+        Err(e) => Ok(error_response(&format!("Failed to stop scrub: {}", e))),
+    }
+}
+
+/// Get scrub status for the pool
+/// NOTE: libzetta doesn't expose detailed scan progress. Only pool health available.
+pub async fn get_scrub_status_handler(pool: String, zfs: ZfsManager) -> Result<impl Reply, Rejection> {
+    match zfs.get_scrub_status(&pool).await {
+        Ok(scrub) => {
+            Ok(success_response(ScrubStatusResponse {
+                status: "success".to_string(),
+                pool: pool.clone(),
+                pool_health: scrub.pool_health,
+                pool_errors: scrub.errors,
+                scan_state: scrub.state,
+                scan_function: scrub.function,
+                scan_errors: scrub.scan_errors,
+                percent_done: None, // Not available via libzetta
+            }))
+        }
+        Err(e) => Ok(error_response(&format!("Failed to get scrub status: {}", e))),
+    }
+}
+
 pub async fn execute_command_handler(
     body: CommandRequest,
     last_action: Arc<RwLock<Option<LastAction>>>,

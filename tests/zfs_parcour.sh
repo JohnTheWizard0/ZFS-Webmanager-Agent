@@ -445,8 +445,65 @@ test_dataset_delete() {
     fi
 }
 
+test_scrub_start() {
+    log_header "11. START SCRUB (MF-001 Phase 2)"
+
+    log_test "POST /pools/$TEST_POOL/scrub - start scrub"
+    local response
+    response=$(api POST "/pools/$TEST_POOL/scrub")
+
+    if is_success "$response"; then
+        log_pass
+    else
+        # EBUSY is acceptable (scrub already running)
+        if echo "$response" | grep -q "busy\|already"; then
+            log_info "Scrub already running (acceptable)"
+            log_pass
+        else
+            log_fail "$(json_field "$response" "message")"
+        fi
+    fi
+}
+
+test_scrub_status() {
+    log_header "12. GET SCRUB STATUS (MF-001 Phase 2)"
+
+    log_test "GET /pools/$TEST_POOL/scrub - get status"
+    local response
+    response=$(api GET "/pools/$TEST_POOL/scrub")
+
+    if is_success "$response"; then
+        local health
+        health=$(json_field "$response" "pool_health")
+        log_info "Pool health: $health"
+        log_pass
+    else
+        log_fail "$(json_field "$response" "message")"
+    fi
+}
+
+test_scrub_stop() {
+    log_header "13. STOP SCRUB (MF-001 Phase 2)"
+
+    log_test "POST /pools/$TEST_POOL/scrub/stop - stop scrub"
+    local response
+    response=$(api POST "/pools/$TEST_POOL/scrub/stop")
+
+    if is_success "$response"; then
+        log_pass
+    else
+        # No scrub running is acceptable
+        if echo "$response" | grep -q "no.*scrub\|not.*running"; then
+            log_info "No scrub to stop (acceptable)"
+            log_pass
+        else
+            log_fail "$(json_field "$response" "message")"
+        fi
+    fi
+}
+
 test_pool_destroy() {
-    log_header "11. DESTROY POOL (MF-001)"
+    log_header "14. DESTROY POOL (MF-001)"
 
     log_test "DELETE /pools/$TEST_POOL"
     local response
@@ -494,6 +551,9 @@ main() {
     test_snapshot_list
     test_snapshot_delete
     test_dataset_delete
+    test_scrub_start
+    test_scrub_status
+    test_scrub_stop
     test_pool_destroy
 
     # Summary

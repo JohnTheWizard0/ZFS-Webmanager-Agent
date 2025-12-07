@@ -85,7 +85,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 destroy_pool_handler(name, force, zfs)
             });
 
-        list.or(status).or(create).or(destroy)
+        // Scrub routes (nested under pools)
+        // POST /pools/{name}/scrub - start scrub
+        // POST /pools/{name}/scrub/pause - pause scrub
+        // POST /pools/{name}/scrub/stop - stop scrub
+        // GET /pools/{name}/scrub - get scrub status
+        let scrub_start = warp::post()
+            .and(warp::path("pools"))
+            .and(warp::path::param())
+            .and(warp::path("scrub"))
+            .and(warp::path::end())
+            .and(with_action_tracking("start_scrub", last_action.clone()))
+            .and(zfs.clone())
+            .and(api_key_check.clone())
+            .and_then(|name: String, zfs: ZfsManager, _| start_scrub_handler(name, zfs));
+
+        let scrub_pause = warp::post()
+            .and(warp::path("pools"))
+            .and(warp::path::param())
+            .and(warp::path("scrub"))
+            .and(warp::path("pause"))
+            .and(warp::path::end())
+            .and(with_action_tracking("pause_scrub", last_action.clone()))
+            .and(zfs.clone())
+            .and(api_key_check.clone())
+            .and_then(|name: String, zfs: ZfsManager, _| pause_scrub_handler(name, zfs));
+
+        let scrub_stop = warp::post()
+            .and(warp::path("pools"))
+            .and(warp::path::param())
+            .and(warp::path("scrub"))
+            .and(warp::path("stop"))
+            .and(warp::path::end())
+            .and(with_action_tracking("stop_scrub", last_action.clone()))
+            .and(zfs.clone())
+            .and(api_key_check.clone())
+            .and_then(|name: String, zfs: ZfsManager, _| stop_scrub_handler(name, zfs));
+
+        let scrub_status = warp::get()
+            .and(warp::path("pools"))
+            .and(warp::path::param())
+            .and(warp::path("scrub"))
+            .and(warp::path::end())
+            .and(with_action_tracking("get_scrub_status", last_action.clone()))
+            .and(zfs.clone())
+            .and(api_key_check.clone())
+            .and_then(|name: String, zfs: ZfsManager, _| get_scrub_status_handler(name, zfs));
+
+        list.or(status).or(create).or(destroy).or(scrub_start).or(scrub_pause).or(scrub_stop).or(scrub_status)
     };
 
     // Snapshot routes

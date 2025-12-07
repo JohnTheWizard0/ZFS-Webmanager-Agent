@@ -178,6 +178,74 @@ impl ZfsManager {
 
         Ok(())
     }
+
+    // =========================================================================
+    // Scrub Operations (MF-001 Phase 2)
+    // =========================================================================
+
+    /// Start or resume a scrub on the pool
+    /// libzetta: ZpoolEngine::scrub()
+    pub async fn start_scrub(&self, pool: &str) -> Result<(), ZfsError> {
+        self.zpool_engine.scrub(pool)
+            .map_err(|e| format!("Failed to start scrub: {}", e))?;
+        Ok(())
+    }
+
+    /// Pause an active scrub
+    /// libzetta: ZpoolEngine::pause_scrub()
+    pub async fn pause_scrub(&self, pool: &str) -> Result<(), ZfsError> {
+        self.zpool_engine.pause_scrub(pool)
+            .map_err(|e| format!("Failed to pause scrub: {}", e))?;
+        Ok(())
+    }
+
+    /// Stop/cancel a scrub
+    /// libzetta: ZpoolEngine::stop_scrub()
+    pub async fn stop_scrub(&self, pool: &str) -> Result<(), ZfsError> {
+        self.zpool_engine.stop_scrub(pool)
+            .map_err(|e| format!("Failed to stop scrub: {}", e))?;
+        Ok(())
+    }
+
+    /// Get scrub status from pool info
+    /// NOTE: libzetta parses scan_line but doesn't expose it in Zpool struct.
+    /// We return what's available: pool health and error info.
+    /// Detailed scan progress (percent, bytes examined) not available via libzetta.
+    pub async fn get_scrub_status(&self, pool: &str) -> Result<ScrubStatus, ZfsError> {
+        let status_options = libzetta::zpool::open3::StatusOptions::default();
+        let zpool = self.zpool_engine.status(pool, status_options)
+            .map_err(|e| format!("Failed to get pool status: {}", e))?;
+
+        // libzetta limitation: scan progress not exposed
+        // Return pool-level info that IS available
+        Ok(ScrubStatus {
+            pool_health: format!("{:?}", zpool.health()),
+            errors: zpool.errors().clone(),
+            // Detailed scan fields unavailable via libzetta
+            state: "unknown".to_string(),
+            function: None,
+            start_time: None,
+            end_time: None,
+            to_examine: None,
+            examined: None,
+            scan_errors: None,
+        })
+    }
+}
+
+/// Scrub status information
+/// NOTE: Detailed scan progress not available via libzetta (limitation).
+/// Only pool_health and errors are populated. Other fields reserved for future.
+pub struct ScrubStatus {
+    pub pool_health: String,
+    pub errors: Option<String>,
+    pub state: String,
+    pub function: Option<String>,
+    pub start_time: Option<u64>,
+    pub end_time: Option<u64>,
+    pub to_examine: Option<u64>,
+    pub examined: Option<u64>,
+    pub scan_errors: Option<u64>,
 }
 
 // ============================================================================

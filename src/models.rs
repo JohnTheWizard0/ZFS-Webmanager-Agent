@@ -97,6 +97,21 @@ pub struct CommandRequest {
     pub args: Option<Vec<String>>,
 }
 
+// Scrub status response
+// NOTE: Detailed scan progress not available via libzetta (limitation).
+#[derive(Debug, Serialize)]
+pub struct ScrubStatusResponse {
+    pub status: String,
+    pub pool: String,
+    pub pool_health: String,
+    pub pool_errors: Option<String>,
+    // Scan details (reserved for future - libzetta doesn't expose these)
+    pub scan_state: String,
+    pub scan_function: Option<String>,
+    pub scan_errors: Option<u64>,
+    pub percent_done: Option<f64>,
+}
+
 // ============================================================================
 // UNIT TESTS — MI-002 (API Framework - Data Layer)
 // ============================================================================
