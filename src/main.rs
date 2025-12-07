@@ -218,6 +218,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and(api_key_check.clone())
             .and_then(|tail: warp::path::Tail, zfs: ZfsManager, _| list_snapshots_handler(tail.as_str().to_string(), zfs));
 
+        // Create must come before clone to avoid body consumption issues
+        // Reject if path ends with /clone (that's the clone route)
         let create = warp::post()
             .and(warp::path("snapshots"))
             .and(warp::path::tail())
@@ -225,7 +227,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and(with_action_tracking("create_snapshot", last_action.clone()))
             .and(zfs.clone())
             .and(api_key_check.clone())
-            .and_then(|tail: warp::path::Tail, body: CreateSnapshot, zfs: ZfsManager, _| create_snapshot_handler(tail.as_str().to_string(), body, zfs));
+            .and_then(|tail: warp::path::Tail, body: CreateSnapshot, zfs: ZfsManager, _| async move {
+                let path = tail.as_str();
+                // Reject if this is actually a clone request
+                if path.ends_with("/clone") {
+                    return Err(warp::reject::not_found());
+                }
+                create_snapshot_handler(path.to_string(), body, zfs).await
+            });
 
         let delete = warp::delete()
             .and(warp::path("snapshots"))
@@ -256,7 +265,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             });
 
-        list.or(clone).or(create).or(delete)
+        // IMPORTANT: create must come before clone to avoid body consumption issues
+        list.or(create).or(clone).or(delete)
     };
 
     // Dataset routes
@@ -362,7 +372,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and(api_key_check.clone())
             .and_then(|body: CreateDataset, zfs: ZfsManager, _: ()| create_dataset_handler(body, zfs));
 
-        list.or(get_properties).or(set_property).or(promote).or(rollback).or(create).or(delete)
+        // IMPORTANT: create must come before promote/rollback because it uses path::end()
+        // while promote/rollback use path::tail() with body::json() which would consume the body
+        create.or(list).or(get_properties).or(set_property).or(promote).or(rollback).or(delete)
     };
 
     // Command routes
