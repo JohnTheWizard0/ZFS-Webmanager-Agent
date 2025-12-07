@@ -237,6 +237,8 @@ pub enum ImplementationMethod {
     Libzfs,
     /// EXPERIMENTAL: Falls back to CLI (zfs/zpool commands)
     CliExperimental,
+    /// Hybrid: libzetta send + CLI receive (lzc_receive too low-level)
+    Hybrid,
     /// Not yet implemented
     Planned,
 }
@@ -513,9 +515,9 @@ impl ZfsFeaturesResponse {
                 name: "Send snapshot to file".to_string(),
                 category: FeatureCategory::Replication,
                 implemented: true,
-                implementation: Some(ImplementationMethod::CliExperimental),
+                implementation: Some(ImplementationMethod::Libzetta),
                 endpoint: Some("POST /v1/snapshots/{ds}/{snap}/send".to_string()),
-                notes: Some("Full/incremental, all flags supported".to_string()),
+                notes: Some("Full/incremental via libzetta send_full/send_incremental".to_string()),
             },
             ZfsFeatureInfo {
                 name: "Receive from file".to_string(),
@@ -523,23 +525,23 @@ impl ZfsFeaturesResponse {
                 implemented: true,
                 implementation: Some(ImplementationMethod::CliExperimental),
                 endpoint: Some("POST /v1/datasets/{path}/receive".to_string()),
-                notes: Some("Force option supported".to_string()),
+                notes: Some("CLI: lzc_receive too low-level (no stream header parsing)".to_string()),
             },
             ZfsFeatureInfo {
                 name: "Replicate to pool".to_string(),
                 category: FeatureCategory::Replication,
                 implemented: true,
-                implementation: Some(ImplementationMethod::CliExperimental),
+                implementation: Some(ImplementationMethod::Hybrid),
                 endpoint: Some("POST /v1/replication/{ds}/{snap}".to_string()),
-                notes: Some("Direct pipe, both pools busy".to_string()),
+                notes: Some("libzetta send + CLI receive (lzc_receive too low-level)".to_string()),
             },
             ZfsFeatureInfo {
                 name: "Estimate send size".to_string(),
                 category: FeatureCategory::Replication,
                 implemented: true,
-                implementation: Some(ImplementationMethod::CliExperimental),
+                implementation: Some(ImplementationMethod::Ffi),
                 endpoint: Some("GET /v1/snapshots/{ds}/{snap}/send-size".to_string()),
-                notes: Some("zfs send -nP dry-run".to_string()),
+                notes: Some("FROM-SCRATCH lzc_send_space() FFI".to_string()),
             },
             ZfsFeatureInfo {
                 name: "Task status".to_string(),
@@ -553,9 +555,9 @@ impl ZfsFeaturesResponse {
                 name: "Incremental send".to_string(),
                 category: FeatureCategory::Replication,
                 implemented: true,
-                implementation: Some(ImplementationMethod::CliExperimental),
+                implementation: Some(ImplementationMethod::Libzetta),
                 endpoint: Some("POST /v1/snapshots/{ds}/{snap}/send".to_string()),
-                notes: Some("from_snapshot param for delta".to_string()),
+                notes: Some("libzetta send_incremental, from_snapshot param".to_string()),
             },
             // System features (not ZFS-specific, no implementation label)
             ZfsFeatureInfo {

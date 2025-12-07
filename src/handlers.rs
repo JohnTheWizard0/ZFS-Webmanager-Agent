@@ -134,6 +134,7 @@ fn build_features_html(data: &ZfsFeaturesResponse) -> String {
                         "ffi" => ("ffi", "FFI"),
                         "libzfs" => ("libzfs", "libzfs"),
                         "cliexperimental" => ("cli", "CLI"),
+                        "hybrid" => ("hybrid", "Hybrid"),
                         _ => ("planned", "Planned"),
                     };
                     format!(r#"<span class="impl-badge {}">{}</span>"#, badge_class, badge_text)
@@ -330,6 +331,7 @@ fn build_features_html(data: &ZfsFeaturesResponse) -> String {
         .impl-badge.ffi {{ background: var(--accent-purple); color: white; }}
         .impl-badge.libzfs {{ background: var(--accent-orange); color: white; }}
         .impl-badge.cli {{ background: var(--accent-yellow); color: black; }}
+        .impl-badge.hybrid {{ background: linear-gradient(90deg, var(--accent-blue), var(--accent-yellow)); color: black; }}
         .impl-badge.planned {{ background: var(--accent-gray); color: white; }}
         .endpoint {{
             margin-top: 0.5rem;
@@ -398,6 +400,7 @@ fn build_features_html(data: &ZfsFeaturesResponse) -> String {
                 <div class="legend-item"><span class="impl-badge libzetta">libzetta</span> Library bindings</div>
                 <div class="legend-item"><span class="impl-badge ffi">FFI</span> Direct lzc_* calls</div>
                 <div class="legend-item"><span class="impl-badge libzfs">libzfs</span> libzfs FFI</div>
+                <div class="legend-item"><span class="impl-badge hybrid">Hybrid</span> libzetta + CLI</div>
                 <div class="legend-item"><span class="impl-badge cli">CLI</span> Experimental</div>
             </div>
         </header>
@@ -856,13 +859,13 @@ pub async fn get_task_status_handler(
     }
 }
 
-/// Estimate send size for a snapshot
+/// Estimate send stream size for a snapshot
 /// GET /v1/snapshots/{dataset}/{snapshot}/send-size
-/// Uses `zfs send -nP` CLI for size estimation
+/// FROM-SCRATCH: Uses lzc_send_space() FFI
 pub async fn send_size_handler(
     snapshot_path: String,  // dataset/snapshot_name
     query: SendSizeQuery,
-    _zfs: ZfsManager,
+    zfs: ZfsManager,
 ) -> Result<impl Reply, Rejection> {
     // Parse snapshot path
     if let Some(pos) = snapshot_path.rfind('/') {
@@ -870,78 +873,42 @@ pub async fn send_size_handler(
         let snapshot_name = &snapshot_path[pos+1..];
         let full_snapshot = format!("{}@{}", dataset, snapshot_name);
 
-        // Build zfs send -nP command
-        let mut args = vec![
-            "send".to_string(),
-            "-n".to_string(),  // dry-run
-            "-P".to_string(),  // parseable output
-        ];
-
-        // Add raw flag if requested
-        if query.raw {
-            args.push("-w".to_string());
-        }
-
-        // Add recursive flag if requested
+        // NOTE: lzc_send_space does NOT support recursive (-R)
+        // If recursive is requested, return error
         if query.recursive {
-            args.push("-R".to_string());
+            return Ok(error_response("Recursive (-R) size estimation is not supported by FFI. Estimate individual snapshots."));
         }
 
-        // Add incremental from if specified
+        // Determine incremental from snapshot
         let incremental = query.from.is_some();
-        let from_snapshot = if let Some(ref from) = query.from {
-            // from can be just snapshot name or full path
-            let from_full = if from.contains('@') {
+        let from_snapshot = query.from.as_ref().map(|from| {
+            if from.contains('@') {
                 from.clone()
             } else {
                 format!("{}@{}", dataset, from)
-            };
-            args.push("-i".to_string());
-            args.push(from_full.clone());
-            Some(from_full)
-        } else {
-            None
-        };
-
-        args.push(full_snapshot.clone());
-
-        // Execute zfs send -nP
-        let output = Command::new("zfs")
-            .args(&args)
-            .output();
-
-        match output {
-            Ok(out) => {
-                if out.status.success() {
-                    // Parse output: looking for "size\t<bytes>" line
-                    let stdout = String::from_utf8_lossy(&out.stdout);
-                    let mut estimated_bytes: u64 = 0;
-
-                    for line in stdout.lines() {
-                        if line.starts_with("size") {
-                            if let Some(size_str) = line.split_whitespace().nth(1) {
-                                estimated_bytes = size_str.parse().unwrap_or(0);
-                            }
-                        }
-                    }
-
-                    // Format human-readable size
-                    let estimated_human = format_bytes(estimated_bytes);
-
-                    Ok(success_response(SendSizeResponse {
-                        status: "success".to_string(),
-                        snapshot: full_snapshot,
-                        estimated_bytes,
-                        estimated_human,
-                        incremental,
-                        from_snapshot,
-                    }))
-                } else {
-                    let stderr = String::from_utf8_lossy(&out.stderr);
-                    Ok(error_response(&format!("zfs send failed: {}", stderr.trim())))
-                }
             }
-            Err(e) => Ok(error_response(&format!("Failed to execute zfs send: {}", e))),
+        });
+
+        // Call FFI-based estimate_send_size
+        match zfs.estimate_send_size(
+            &full_snapshot,
+            from_snapshot.as_deref(),
+            query.raw,
+            false,  // compressed flag for send_space (not directly supported by lzc_send_space)
+        ).await {
+            Ok(estimated_bytes) => {
+                let estimated_human = format_bytes(estimated_bytes);
+
+                Ok(success_response(SendSizeResponse {
+                    status: "success".to_string(),
+                    snapshot: full_snapshot,
+                    estimated_bytes,
+                    estimated_human,
+                    incremental,
+                    from_snapshot,
+                }))
+            }
+            Err(e) => Ok(error_response(&e)),
         }
     } else {
         Ok(error_response("Invalid snapshot path: expected /snapshots/dataset/snapshot_name/send-size"))

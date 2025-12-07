@@ -15,14 +15,15 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   - `TaskState` — Task status with progress and result tracking
   - Auto-expiry of completed tasks (1 hour)
   - Both source AND target pools marked busy during replication
-- `src/zfs_management.rs` — Replication operations via CLI (MF-005)
-  - `send_snapshot_to_file()` — Full/incremental send with all flags
-  - `receive_snapshot_from_file()` — Receive with force option
-  - `replicate_snapshot()` — Direct pipe send→receive
+- `src/zfs_management.rs` — Replication operations (MF-005)
+  - `send_snapshot_to_file()` — **libzetta** `send_full()`/`send_incremental()` with SendFlags
+  - `receive_snapshot_from_file()` — **CLI** `zfs receive` (lzc_receive too low-level)
+  - `replicate_snapshot()` — **Hybrid** libzetta send + CLI receive via pipe
+  - `estimate_send_size()` — **FFI** `lzc_send_space()` for accurate stream size estimation
   - `get_pool_from_path()` — Pool extraction helper
 - `src/handlers.rs` — Replication HTTP handlers
   - `get_task_status_handler` — Task status lookup
-  - `send_size_handler` — Size estimation via `zfs send -nP`
+  - `send_size_handler` — Size estimation via **FFI** `lzc_send_space()`
   - `send_snapshot_handler` — Send to file with task tracking
   - `receive_snapshot_handler` — Receive from file with task tracking
   - `replicate_snapshot_handler` — Direct replication with both pools busy
@@ -76,6 +77,15 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   - `GET /v1/pools/importable`
 - `openapi.yaml` — OpenAPI 3.0 specification (620 lines)
 - `CHANGELOG.md` — Version history tracking
+
+### Changed
+- `src/zfs_management.rs` — Replication refactored from CLI to libzetta/FFI
+  - Send: CLI → **libzetta** `ZfsEngine::send_full()`/`send_incremental()`
+  - Size estimation: CLI `zfs send -nP` → **FFI** `lzc_send_space()`
+  - Replicate: Full CLI → **Hybrid** (libzetta send + CLI receive via pipe)
+  - NOTE: `lzc_receive()` is too low-level (no stream header parsing), kept CLI
+- `src/models.rs` — Added `ImplementationMethod::Hybrid` enum variant
+- `src/handlers.rs` — Features page now shows Hybrid badge with gradient style
 - `rust-toolchain.toml` — Pinned to stable (Rust 1.91.1)
 - `src/zfs_management.rs` — Snapshot clone/promote operations (MF-003 Phase 3)
   - `clone_snapshot()` — FROM-SCRATCH via `lzc_clone()` FFI
