@@ -1,0 +1,866 @@
+openapi: 3.0.3
+info:
+  title: ZFS Web Manager API
+  description: |
+    RESTful API for managing ZFS pools, datasets, and snapshots.
+
+    ## Authentication
+    All endpoints (except `/v1/health` and `/v1/docs`) require an API key passed via the `X-API-Key` header.
+    The API key is generated on first run and stored in `~/.zfs_webmanager/api_key`.
+
+    ## Error Handling
+    All endpoints return JSON with a `status` field. On error:
+    ```json
+    {"status": "error", "message": "Description of the error"}
+    ```
+  version: 0.3.3
+  contact:
+    name: ZFS Agent
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:9876/v1
+    description: Local development server (API v1)
+
+security:
+  - ApiKeyAuth: []
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key for authentication
+
+  schemas:
+    # Common response types
+    ActionResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: success
+        message:
+          type: string
+          example: Operation completed successfully
+      required:
+        - status
+        - message
+
+    ErrorResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          example: Failed to perform operation
+      required:
+        - status
+        - message
+
+    # Health
+    LastAction:
+      type: object
+      properties:
+        function:
+          type: string
+          example: list_pools
+        timestamp:
+          type: integer
+          format: int64
+          example: 1733536800
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: success
+        version:
+          type: string
+          example: "0.3.3"
+        last_action:
+          $ref: '#/components/schemas/LastAction'
+          nullable: true
+      required:
+        - status
+        - version
+
+    # Pool types
+    PoolListResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: success
+        pools:
+          type: array
+          items:
+            type: string
+          example: ["tank", "backup"]
+      required:
+        - status
+        - pools
+
+    PoolStatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: success
+        name:
+          type: string
+          example: tank
+        health:
+          type: string
+          enum: [Online, Degraded, Faulted, Offline, Removed, Unavail]
+          example: Online
+        size:
+          type: integer
+          format: int64
+          description: Total size in bytes
+          example: 1099511627776
+        allocated:
+          type: integer
+          format: int64
+          description: Allocated space in bytes
+          example: 549755813888
+        free:
+          type: integer
+          format: int64
+          description: Free space in bytes
+          example: 549755813888
+        capacity:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Capacity percentage
+          example: 50
+        vdevs:
+          type: integer
+          description: Number of virtual devices
+          example: 2
+        errors:
+          type: string
+          nullable: true
+          description: Error message if any
+      required:
+        - status
+        - name
+        - health
+        - size
+        - allocated
+        - free
+        - capacity
+        - vdevs
+
+    CreatePoolRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Pool name
+          example: tank
+        disks:
+          type: array
+          items:
+            type: string
+          description: List of disk paths
+          example: ["/dev/sda", "/dev/sdb"]
+        raid_type:
+          type: string
+          enum: [mirror, raidz, raidz2, raidz3]
+          nullable: true
+          description: RAID type (optional for single disk)
+          example: mirror
+      required:
+        - name
+        - disks
+
+    # Scrub types
+    ScrubStatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: success
+        pool:
+          type: string
+          example: tank
+        pool_health:
+          type: string
+          example: Online
+        pool_errors:
+          type: string
+          nullable: true
+        scan_state:
+          type: string
+          enum: [none, scanning, finished, canceled]
+          description: Current scan state
+          example: scanning
+        scan_function:
+          type: string
+          enum: [scrub, resilver, errorscrub]
+          nullable: true
+          description: Type of scan operation
+          example: scrub
+        start_time:
+          type: integer
+          format: int64
+          nullable: true
+          description: Unix timestamp when scan started
+          example: 1733536800
+        end_time:
+          type: integer
+          format: int64
+          nullable: true
+          description: Unix timestamp when scan ended
+        to_examine:
+          type: integer
+          format: int64
+          nullable: true
+          description: Total bytes to examine
+          example: 1099511627776
+        examined:
+          type: integer
+          format: int64
+          nullable: true
+          description: Bytes examined so far
+          example: 549755813888
+        scan_errors:
+          type: integer
+          format: int64
+          nullable: true
+          description: Number of errors found
+          example: 0
+        percent_done:
+          type: number
+          format: double
+          nullable: true
+          description: Percentage complete (0-100)
+          example: 50.0
+      required:
+        - status
+        - pool
+        - pool_health
+        - scan_state
+
+    # Import/Export types
+    ExportPoolRequest:
+      type: object
+      properties:
+        force:
+          type: boolean
+          default: false
+          description: Force export even if filesystems are in use
+
+    ImportPoolRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Pool name to import
+          example: tank
+        dir:
+          type: string
+          nullable: true
+          description: Directory to search for pool (optional)
+          example: /dev/disk/by-id
+      required:
+        - name
+
+    ImportablePoolInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          example: tank
+        health:
+          type: string
+          example: Online
+      required:
+        - name
+        - health
+
+    ImportablePoolsResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: success
+        pools:
+          type: array
+          items:
+            $ref: '#/components/schemas/ImportablePoolInfo'
+      required:
+        - status
+        - pools
+
+    # Dataset types
+    DatasetResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: success
+        datasets:
+          type: array
+          items:
+            type: string
+          example: ["tank", "tank/data", "tank/backup"]
+      required:
+        - status
+        - datasets
+
+    CreateDatasetRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Full dataset path
+          example: tank/data
+        kind:
+          type: string
+          enum: [filesystem, volume]
+          description: Dataset type
+          example: filesystem
+        properties:
+          type: object
+          additionalProperties:
+            type: string
+          nullable: true
+          description: Optional ZFS properties
+          example:
+            compression: lz4
+            quota: 10G
+      required:
+        - name
+        - kind
+
+    # Snapshot types
+    ListResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: success
+        items:
+          type: array
+          items:
+            type: string
+          example: ["tank/data@backup-001", "tank/data@backup-002"]
+      required:
+        - status
+        - items
+
+    CreateSnapshotRequest:
+      type: object
+      properties:
+        snapshot_name:
+          type: string
+          description: Snapshot name (without @)
+          example: backup-2025-01-01
+      required:
+        - snapshot_name
+
+    # Command types
+    CommandRequest:
+      type: object
+      properties:
+        command:
+          type: string
+          description: Command to execute
+          example: zpool
+        args:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: Command arguments
+          example: ["status", "-v"]
+      required:
+        - command
+
+    CommandResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: success
+        output:
+          type: string
+          description: Combined stdout and stderr
+          example: "  pool: tank\n state: ONLINE\n"
+        exit_code:
+          type: integer
+          description: Process exit code
+          example: 0
+      required:
+        - status
+        - output
+        - exit_code
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      description: Returns server status, version, and last action
+      operationId: healthCheck
+      security: []
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /pools:
+    get:
+      summary: List pools
+      description: Returns list of all ZFS pool names
+      operationId: listPools
+      tags:
+        - Pools
+      responses:
+        '200':
+          description: List of pool names
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PoolListResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    post:
+      summary: Create pool
+      description: Create a new ZFS pool
+      operationId: createPool
+      tags:
+        - Pools
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePoolRequest'
+      responses:
+        '200':
+          description: Pool created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /pools/importable:
+    get:
+      summary: List importable pools
+      description: Discover pools available for import
+      operationId: listImportablePools
+      tags:
+        - Pools
+      parameters:
+        - name: dir
+          in: query
+          description: Directory to search (defaults to /dev/)
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of importable pools
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportablePoolsResponse'
+
+  /pools/import:
+    post:
+      summary: Import pool
+      description: Import an exported ZFS pool
+      operationId: importPool
+      tags:
+        - Pools
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportPoolRequest'
+      responses:
+        '200':
+          description: Pool imported
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResponse'
+        '400':
+          description: Import failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /pools/{name}:
+    get:
+      summary: Get pool status
+      description: Returns detailed status of a specific pool
+      operationId: getPoolStatus
+      tags:
+        - Pools
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Pool name
+      responses:
+        '200':
+          description: Pool status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PoolStatusResponse'
+        '404':
+          description: Pool not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      summary: Destroy pool
+      description: Destroy a ZFS pool
+      operationId: destroyPool
+      tags:
+        - Pools
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Pool name
+        - name: force
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Force destroy
+      responses:
+        '200':
+          description: Pool destroyed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResponse'
+
+  /pools/{name}/export:
+    post:
+      summary: Export pool
+      description: Export a pool from the system
+      operationId: exportPool
+      tags:
+        - Pools
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Pool name
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExportPoolRequest'
+      responses:
+        '200':
+          description: Pool exported
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResponse'
+
+  /pools/{name}/scrub:
+    get:
+      summary: Get scrub status
+      description: Returns current scrub/resilver status with progress
+      operationId: getScrubStatus
+      tags:
+        - Scrub
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Pool name
+      responses:
+        '200':
+          description: Scrub status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScrubStatusResponse'
+
+    post:
+      summary: Start scrub
+      description: Start or resume a scrub on the pool
+      operationId: startScrub
+      tags:
+        - Scrub
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Pool name
+      responses:
+        '200':
+          description: Scrub started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResponse'
+
+  /pools/{name}/scrub/pause:
+    post:
+      summary: Pause scrub
+      description: Pause an active scrub
+      operationId: pauseScrub
+      tags:
+        - Scrub
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Pool name
+      responses:
+        '200':
+          description: Scrub paused
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResponse'
+
+  /pools/{name}/scrub/stop:
+    post:
+      summary: Stop scrub
+      description: Stop/cancel an active scrub
+      operationId: stopScrub
+      tags:
+        - Scrub
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Pool name
+      responses:
+        '200':
+          description: Scrub stopped
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResponse'
+
+  /datasets/{pool}:
+    get:
+      summary: List datasets
+      description: List all datasets in a pool
+      operationId: listDatasets
+      tags:
+        - Datasets
+      parameters:
+        - name: pool
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Pool name
+      responses:
+        '200':
+          description: List of datasets
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatasetResponse'
+
+  /datasets:
+    post:
+      summary: Create dataset
+      description: Create a new filesystem or volume
+      operationId: createDataset
+      tags:
+        - Datasets
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDatasetRequest'
+      responses:
+        '200':
+          description: Dataset created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResponse'
+
+  /datasets/{path}:
+    delete:
+      summary: Delete dataset
+      description: Delete a dataset (supports nested paths like pool/dataset/child)
+      operationId: deleteDataset
+      tags:
+        - Datasets
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Full dataset path
+      responses:
+        '200':
+          description: Dataset deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResponse'
+
+  /snapshots/{dataset}:
+    get:
+      summary: List snapshots
+      description: List all snapshots for a dataset (supports nested paths)
+      operationId: listSnapshots
+      tags:
+        - Snapshots
+      parameters:
+        - name: dataset
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Dataset path (e.g., pool/dataset)
+      responses:
+        '200':
+          description: List of snapshots
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListResponse'
+
+    post:
+      summary: Create snapshot
+      description: Create a new snapshot
+      operationId: createSnapshot
+      tags:
+        - Snapshots
+      parameters:
+        - name: dataset
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Dataset path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSnapshotRequest'
+      responses:
+        '200':
+          description: Snapshot created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResponse'
+
+  /snapshots/{dataset}/{snapshot}:
+    delete:
+      summary: Delete snapshot
+      description: Delete a snapshot
+      operationId: deleteSnapshot
+      tags:
+        - Snapshots
+      parameters:
+        - name: dataset
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Dataset path
+        - name: snapshot
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Snapshot name
+      responses:
+        '200':
+          description: Snapshot deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResponse'
+
+  /command:
+    post:
+      summary: Execute command
+      description: Execute an arbitrary shell command (use with caution)
+      operationId: executeCommand
+      tags:
+        - System
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommandRequest'
+      responses:
+        '200':
+          description: Command executed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandResponse'
+
+tags:
+  - name: Health
+    description: Server health and status
+  - name: Pools
+    description: ZFS pool operations
+  - name: Scrub
+    description: Pool scrub/resilver operations
+  - name: Datasets
+    description: ZFS dataset (filesystem/volume) operations
+  - name: Snapshots
+    description: ZFS snapshot operations
+  - name: System
+    description: System-level operations

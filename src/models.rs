@@ -117,6 +117,32 @@ pub struct ScrubStatusResponse {
     pub percent_done: Option<f64>,     // Calculated: (examined / to_examine) * 100
 }
 
+// Import/Export request structures
+#[derive(Debug, Deserialize)]
+pub struct ExportPoolRequest {
+    #[serde(default)]
+    pub force: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ImportPoolRequest {
+    pub name: String,
+    pub dir: Option<String>,  // Optional: directory to search for pool
+}
+
+// Import/Export response structures
+#[derive(Debug, Serialize)]
+pub struct ImportablePoolInfo {
+    pub name: String,
+    pub health: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ImportablePoolsResponse {
+    pub status: String,
+    pub pools: Vec<ImportablePoolInfo>,
+}
+
 // ============================================================================
 // UNIT TESTS — MI-002 (API Framework - Data Layer)
 // ============================================================================

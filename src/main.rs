@@ -8,7 +8,7 @@ use warp::Filter;
 use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
 use zfs_management::ZfsManager;
-use models::{LastAction, CreatePool, CreateSnapshot, CreateDataset, CommandRequest};
+use models::{LastAction, CreatePool, CreateSnapshot, CreateDataset, CommandRequest, ExportPoolRequest, ImportPoolRequest};
 use handlers::*;
 use auth::*;
 use utils::with_action_tracking;
@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and(warp::any().map(move || api_key.clone()))
         .and_then(check_api_key);
 
-    // Health route
+    // Health route (no auth required)
     let health_routes = {
         let last_action_clone = last_action.clone();
         warp::get()
@@ -43,6 +43,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and(warp::any().map(move || last_action_clone.clone()))
             .and_then(health_check_handler)
     };
+
+    // OpenAPI docs routes (no auth required)
+    // GET /v1/docs - Swagger UI
+    // GET /v1/openapi.yaml - OpenAPI spec
+    let docs_route = warp::get()
+        .and(warp::path("docs"))
+        .and(warp::path::end())
+        .and_then(docs_handler);
+
+    let openapi_route = warp::get()
+        .and(warp::path("openapi.yaml"))
+        .and(warp::path::end())
+        .and_then(openapi_handler);
 
     // Pool routes
     let pool_routes = {
@@ -132,7 +145,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and(api_key_check.clone())
             .and_then(|name: String, zfs: ZfsManager, _| get_scrub_status_handler(name, zfs));
 
-        list.or(status).or(create).or(destroy).or(scrub_start).or(scrub_pause).or(scrub_stop).or(scrub_status)
+        // Import/Export routes
+        // POST /pools/{name}/export - export a pool
+        // GET /pools/importable - list importable pools
+        // POST /pools/import - import a pool
+        let export_pool = warp::post()
+            .and(warp::path("pools"))
+            .and(warp::path::param())
+            .and(warp::path("export"))
+            .and(warp::path::end())
+            .and(warp::body::json())
+            .and(with_action_tracking("export_pool", last_action.clone()))
+            .and(zfs.clone())
+            .and(api_key_check.clone())
+            .and_then(|name: String, body: ExportPoolRequest, zfs: ZfsManager, _| {
+                export_pool_handler(name, body, zfs)
+            });
+
+        let list_importable = warp::get()
+            .and(warp::path("pools"))
+            .and(warp::path("importable"))
+            .and(warp::path::end())
+            .and(warp::query::<HashMap<String, String>>())
+            .and(with_action_tracking("list_importable_pools", last_action.clone()))
+            .and(zfs.clone())
+            .and(api_key_check.clone())
+            .and_then(|query: HashMap<String, String>, zfs: ZfsManager, _| {
+                let dir = query.get("dir").cloned();
+                list_importable_pools_handler(dir, zfs)
+            });
+
+        let import_pool = warp::post()
+            .and(warp::path("pools"))
+            .and(warp::path("import"))
+            .and(warp::path::end())
+            .and(warp::body::json())
+            .and(with_action_tracking("import_pool", last_action.clone()))
+            .and(zfs.clone())
+            .and(api_key_check.clone())
+            .and_then(|body: ImportPoolRequest, zfs: ZfsManager, _| {
+                import_pool_handler(body, zfs)
+            });
+
+        list.or(status).or(create).or(destroy)
+            .or(scrub_start).or(scrub_pause).or(scrub_stop).or(scrub_status)
+            .or(export_pool).or(list_importable).or(import_pool)
     };
 
     // Snapshot routes
@@ -213,16 +270,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
     };
 
-    // Combine all routes
-    let routes = health_routes
-        .or(pool_routes)
-        .or(snapshot_routes)
-        .or(dataset_routes)
-        .or(command_routes);
+    // Combine all API routes under /v1
+    let v1_routes = warp::path("v1").and(
+        health_routes
+            .or(docs_route)
+            .or(openapi_route)
+            .or(pool_routes)
+            .or(snapshot_routes)
+            .or(dataset_routes)
+            .or(command_routes)
+    );
 
     // Start server
     println!("Server starting on port: 9876");
-    warp::serve(routes).run(([0, 0, 0, 0], 9876)).await;
+    println!("API base URL: http://localhost:9876/v1");
+    println!("API docs: http://localhost:9876/v1/docs");
+    warp::serve(v1_routes).run(([0, 0, 0, 0], 9876)).await;
 
     Ok(())
 }

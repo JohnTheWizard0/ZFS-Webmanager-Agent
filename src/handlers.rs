@@ -5,6 +5,58 @@ use warp::{Rejection, Reply};
 use std::sync::{Arc, RwLock};
 use std::process::Command;
 
+// Embed OpenAPI spec at compile time
+const OPENAPI_SPEC: &str = include_str!("../openapi.yaml");
+
+/// Serve OpenAPI spec as YAML
+pub async fn openapi_handler() -> Result<impl Reply, Rejection> {
+    Ok(warp::reply::with_header(
+        OPENAPI_SPEC,
+        "Content-Type",
+        "application/yaml",
+    ))
+}
+
+/// Serve Swagger UI HTML page
+pub async fn docs_handler() -> Result<impl Reply, Rejection> {
+    let html = r#"<!DOCTYPE html>
+<html>
+<head>
+    <title>ZFS Web Manager API</title>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+    <style>
+        html { box-sizing: border-box; overflow: -moz-scrollbars-vertical; overflow-y: scroll; }
+        *, *:before, *:after { box-sizing: inherit; }
+        body { margin: 0; background: #fafafa; }
+    </style>
+</head>
+<body>
+    <div id="swagger-ui"></div>
+    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js" charset="UTF-8"></script>
+    <script>
+        window.onload = function() {
+            window.ui = SwaggerUIBundle({
+                url: "/v1/openapi.yaml",
+                dom_id: '#swagger-ui',
+                deepLinking: true,
+                presets: [
+                    SwaggerUIBundle.presets.apis
+                ]
+            });
+        };
+    </script>
+</body>
+</html>"#;
+
+    Ok(warp::reply::with_header(
+        html,
+        "Content-Type",
+        "text/html; charset=utf-8",
+    ))
+}
+
 pub async fn health_check_handler(
     last_action: Arc<RwLock<Option<LastAction>>>,
 ) -> Result<impl Reply, Rejection> {
@@ -209,6 +261,66 @@ pub async fn get_scrub_status_handler(pool: String, zfs: ZfsManager) -> Result<i
             }))
         }
         Err(e) => Ok(error_response(&format!("Failed to get scrub status: {}", e))),
+    }
+}
+
+// =========================================================================
+// Import/Export Handlers (MF-001 Phase 2)
+// =========================================================================
+
+/// Export a pool from the system
+pub async fn export_pool_handler(
+    pool: String,
+    body: ExportPoolRequest,
+    zfs: ZfsManager,
+) -> Result<impl Reply, Rejection> {
+    match zfs.export_pool(&pool, body.force).await {
+        Ok(_) => Ok(success_response(ActionResponse {
+            status: "success".to_string(),
+            message: format!("Pool '{}' exported successfully", pool),
+        })),
+        Err(e) => Ok(error_response(&format!("Failed to export pool: {}", e))),
+    }
+}
+
+/// List pools available for import
+pub async fn list_importable_pools_handler(
+    dir: Option<String>,
+    zfs: ZfsManager,
+) -> Result<impl Reply, Rejection> {
+    let result = match dir {
+        Some(d) => zfs.list_importable_pools_from_dir(&d).await,
+        None => zfs.list_importable_pools().await,
+    };
+
+    match result {
+        Ok(pools) => Ok(success_response(ImportablePoolsResponse {
+            status: "success".to_string(),
+            pools: pools.into_iter().map(|p| ImportablePoolInfo {
+                name: p.name,
+                health: p.health,
+            }).collect(),
+        })),
+        Err(e) => Ok(error_response(&format!("Failed to list importable pools: {}", e))),
+    }
+}
+
+/// Import a pool into the system
+pub async fn import_pool_handler(
+    body: ImportPoolRequest,
+    zfs: ZfsManager,
+) -> Result<impl Reply, Rejection> {
+    let result = match body.dir {
+        Some(ref d) => zfs.import_pool_from_dir(&body.name, d).await,
+        None => zfs.import_pool(&body.name).await,
+    };
+
+    match result {
+        Ok(_) => Ok(success_response(ActionResponse {
+            status: "success".to_string(),
+            message: format!("Pool '{}' imported successfully", body.name),
+        })),
+        Err(e) => Ok(error_response(&format!("Failed to import pool: {}", e))),
     }
 }
 

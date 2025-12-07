@@ -1,5 +1,5 @@
 use crate::models::CreatePool;
-use libzetta::zpool::{ZpoolEngine, ZpoolOpen3, CreateVdevRequest, CreateZpoolRequest, DestroyMode};
+use libzetta::zpool::{ZpoolEngine, ZpoolOpen3, CreateVdevRequest, CreateZpoolRequest, DestroyMode, ExportMode};
 use libzetta::zfs::{ZfsEngine, DelegatingZfsEngine, CreateDatasetRequest, DatasetKind};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -17,6 +17,12 @@ pub struct PoolStatus {
     pub capacity: u8,
     pub vdevs: u32,
     pub errors: Option<String>,
+}
+
+/// Pool available for import
+pub struct ImportablePool {
+    pub name: String,
+    pub health: String,
 }
 
 pub type ZfsError = String;
@@ -114,9 +120,66 @@ impl ZfsManager {
 
     pub async fn destroy_pool(&self, name: &str, force: bool) -> Result<(), ZfsError> {
         let mode = if force { DestroyMode::Force } else { DestroyMode::Gentle };
-        
+
         self.zpool_engine.destroy(name, mode)
             .map_err(|e| format!("Failed to destroy pool: {}", e))?;
+
+        Ok(())
+    }
+
+    // =========================================================================
+    // Pool Import/Export Operations (MF-001 Phase 2)
+    // =========================================================================
+
+    /// Export a pool from the system
+    /// libzetta: ZpoolEngine::export()
+    pub async fn export_pool(&self, name: &str, force: bool) -> Result<(), ZfsError> {
+        let mode = if force { ExportMode::Force } else { ExportMode::Gentle };
+
+        self.zpool_engine.export(name, mode)
+            .map_err(|e| format!("Failed to export pool: {}", e))?;
+
+        Ok(())
+    }
+
+    /// List pools available for import from /dev/
+    /// libzetta: ZpoolEngine::available()
+    pub async fn list_importable_pools(&self) -> Result<Vec<ImportablePool>, ZfsError> {
+        let pools = self.zpool_engine.available()
+            .map_err(|e| format!("Failed to list importable pools: {}", e))?;
+
+        Ok(pools.into_iter().map(|p| ImportablePool {
+            name: p.name().clone(),
+            health: format!("{:?}", p.health()),
+        }).collect())
+    }
+
+    /// List pools available for import from a specific directory
+    /// libzetta: ZpoolEngine::available_in_dir()
+    pub async fn list_importable_pools_from_dir(&self, dir: &str) -> Result<Vec<ImportablePool>, ZfsError> {
+        let pools = self.zpool_engine.available_in_dir(PathBuf::from(dir))
+            .map_err(|e| format!("Failed to list importable pools from {}: {}", dir, e))?;
+
+        Ok(pools.into_iter().map(|p| ImportablePool {
+            name: p.name().clone(),
+            health: format!("{:?}", p.health()),
+        }).collect())
+    }
+
+    /// Import a pool from /dev/
+    /// libzetta: ZpoolEngine::import()
+    pub async fn import_pool(&self, name: &str) -> Result<(), ZfsError> {
+        self.zpool_engine.import(name)
+            .map_err(|e| format!("Failed to import pool: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Import a pool from a specific directory
+    /// libzetta: ZpoolEngine::import_from_dir()
+    pub async fn import_pool_from_dir(&self, name: &str, dir: &str) -> Result<(), ZfsError> {
+        self.zpool_engine.import_from_dir(name, PathBuf::from(dir))
+            .map_err(|e| format!("Failed to import pool from {}: {}", dir, e))?;
 
         Ok(())
     }
