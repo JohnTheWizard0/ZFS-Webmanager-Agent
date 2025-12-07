@@ -10,6 +10,21 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ## [Unreleased]
 
 ### Added
+- `src/zfs_management.rs` — Dataset properties operations (MF-002 Phase 2)
+  - `get_dataset_properties()` — via libzetta `ZfsEngine::read_properties()`
+  - `set_dataset_property()` — **EXPERIMENTAL** via CLI (`zfs set`)
+  - `DatasetProperties` struct with comprehensive field mapping
+  - `is_valid_property_name()` — input validation for security
+- `src/handlers.rs` — Dataset properties HTTP handlers
+  - `get_dataset_properties_handler`
+  - `set_dataset_property_handler`
+- `src/models.rs` — Dataset properties request/response types
+  - `DatasetPropertiesResponse`
+  - `SetPropertyRequest`
+- `src/main.rs` — Dataset properties API routes
+  - `GET /v1/datasets/{path}/properties`
+  - `PUT /v1/datasets/{path}/properties` (**EXPERIMENTAL**)
+- `openapi.yaml` — Dataset properties endpoint documentation
 - `src/handlers.rs` — Swagger UI documentation endpoint
   - `docs_handler` — Serves interactive Swagger UI at `/v1/docs`
   - `openapi_handler` — Serves OpenAPI spec at `/v1/openapi.yaml`
@@ -35,6 +50,48 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - `openapi.yaml` — OpenAPI 3.0 specification (620 lines)
 - `CHANGELOG.md` — Version history tracking
 - `rust-toolchain.toml` — Pinned to stable (Rust 1.91.1)
+- `src/zfs_management.rs` — Snapshot clone/promote operations (MF-003 Phase 3)
+  - `clone_snapshot()` — FROM-SCRATCH via `lzc_clone()` FFI
+  - `promote_dataset()` — FROM-SCRATCH via `lzc_promote()` FFI
+  - `errno_to_string()` — Helper for FFI error codes
+- `src/handlers.rs` — Clone/promote HTTP handlers
+  - `clone_snapshot_handler`
+  - `promote_dataset_handler`
+- `src/models.rs` — Clone/promote request/response types
+  - `CloneSnapshotRequest`
+  - `CloneResponse`
+  - `PromoteResponse`
+- `src/main.rs` — Clone/promote API routes
+  - `POST /v1/snapshots/{dataset}/{snapshot}/clone`
+  - `POST /v1/datasets/{path}/promote`
+- `openapi.yaml` — Clone/promote endpoint documentation
+- `Cargo.toml` — Added `libzetta-zfs-core-sys` and `libc` dependencies for FFI
+- `src/zfs_management.rs` — Snapshot rollback operations (MF-003 Phase 3)
+  - `rollback_dataset()` — FROM-SCRATCH via `lzc_rollback_to()` FFI
+  - `RollbackResult` struct with destruction tracking
+  - `RollbackError` enum for detailed error handling
+  - Three safety levels: default (most recent only), force_destroy_newer (-r), force_destroy_clones (-R)
+- `src/handlers.rs` — Rollback HTTP handler
+  - `rollback_dataset_handler` with blocked response for safety violations
+- `src/models.rs` — Rollback request/response types
+  - `RollbackRequest` with force flags
+  - `RollbackResponse` with destruction tracking
+  - `RollbackBlockedResponse` for safety violations
+- `src/main.rs` — Rollback API route
+  - `POST /v1/datasets/{path}/rollback`
+- `openapi.yaml` — Rollback endpoint documentation with all schemas
+- `src/models.rs` — ZFS features discovery types
+  - `ImplementationMethod` enum (libzetta, ffi, libzfs, cli_experimental, planned)
+  - `FeatureCategory` enum (pool, dataset, snapshot, property, replication, system)
+  - `ZfsFeatureInfo` struct with feature details
+  - `ZfsFeaturesResponse` with summary and features list
+- `src/handlers.rs` — ZFS features handler
+  - `zfs_features_handler` — returns all features with implementation status
+- `src/main.rs` — ZFS features route
+  - `GET /v1/features` (no auth required)
+  - HTML view by default, JSON via `?format=json`
+- `src/handlers.rs` — `build_features_html()` for visual dashboard
+- `openapi.yaml` — ZFS features endpoint documentation
 
 ### Changed
 - `src/main.rs` — All API routes now under `/v1/` prefix

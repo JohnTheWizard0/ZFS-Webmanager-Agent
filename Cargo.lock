@@ -2307,7 +2307,9 @@ name = "zfs_webmanager_agent"
 version = "0.3.3"
 dependencies = [
  "dirs",
+ "libc",
  "libzetta",
+ "libzetta-zfs-core-sys",
  "libzfs",
  "rand",
  "serde",

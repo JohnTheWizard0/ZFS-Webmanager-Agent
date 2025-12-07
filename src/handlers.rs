@@ -1,6 +1,6 @@
 use crate::models::*;
 use crate::utils::{success_response, error_response};
-use crate::zfs_management::ZfsManager;
+use crate::zfs_management::{ZfsManager, RollbackError};
 use warp::{Rejection, Reply};
 use std::sync::{Arc, RwLock};
 use std::process::Command;
@@ -61,14 +61,361 @@ pub async fn health_check_handler(
     last_action: Arc<RwLock<Option<LastAction>>>,
 ) -> Result<impl Reply, Rejection> {
     let last_action_data = last_action.read().unwrap().clone();
-    
+
     let response = HealthResponse {
         status: "success".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         last_action: last_action_data,
     };
-    
+
     Ok(warp::reply::json(&response))
+}
+
+/// Return all ZFS features with implementation status
+/// No authentication required - informational endpoint
+/// Returns HTML by default, JSON if ?format=json
+pub async fn zfs_features_handler(format: Option<String>) -> Result<Box<dyn Reply>, Rejection> {
+    let response = ZfsFeaturesResponse::build();
+
+    // Return JSON if explicitly requested
+    if format.as_deref() == Some("json") {
+        return Ok(Box::new(warp::reply::json(&response)));
+    }
+
+    // Build HTML view
+    let html = build_features_html(&response);
+    Ok(Box::new(warp::reply::html(html)))
+}
+
+/// Build a visually appealing HTML page for ZFS features
+fn build_features_html(data: &ZfsFeaturesResponse) -> String {
+    let mut features_html = String::new();
+
+    // Group features by category
+    let categories = [
+        ("pool", "Pool Operations", "🏊"),
+        ("dataset", "Dataset Operations", "📁"),
+        ("snapshot", "Snapshot Operations", "📸"),
+        ("property", "Properties", "⚙️"),
+        ("replication", "Replication", "🔄"),
+        ("system", "System", "🖥️"),
+    ];
+
+    for (cat_key, cat_name, cat_icon) in categories {
+        let cat_features: Vec<_> = data.features.iter()
+            .filter(|f| format!("{:?}", f.category).to_lowercase() == cat_key)
+            .collect();
+
+        if cat_features.is_empty() {
+            continue;
+        }
+
+        let implemented_count = cat_features.iter().filter(|f| f.implemented).count();
+
+        features_html.push_str(&format!(r#"
+        <div class="category">
+            <div class="category-header">
+                <span class="category-icon">{}</span>
+                <span class="category-name">{}</span>
+                <span class="category-count">{}/{}</span>
+            </div>
+            <div class="features-grid">
+        "#, cat_icon, cat_name, implemented_count, cat_features.len()));
+
+        for feature in cat_features {
+            let status_class = if feature.implemented { "implemented" } else { "planned" };
+            let status_icon = if feature.implemented { "✓" } else { "○" };
+
+            let impl_badge = match &feature.implementation {
+                Some(m) => {
+                    let (badge_class, badge_text) = match format!("{:?}", m).to_lowercase().as_str() {
+                        "libzetta" => ("libzetta", "libzetta"),
+                        "ffi" => ("ffi", "FFI"),
+                        "libzfs" => ("libzfs", "libzfs"),
+                        "cliexperimental" => ("cli", "CLI"),
+                        _ => ("planned", "Planned"),
+                    };
+                    format!(r#"<span class="impl-badge {}">{}</span>"#, badge_class, badge_text)
+                }
+                None => String::new(),
+            };
+
+            let endpoint_html = feature.endpoint.as_ref()
+                .map(|e| format!(r#"<div class="endpoint"><code>{}</code></div>"#, e))
+                .unwrap_or_default();
+
+            let notes_html = feature.notes.as_ref()
+                .map(|n| format!(r#"<div class="notes">{}</div>"#, n))
+                .unwrap_or_default();
+
+            features_html.push_str(&format!(r#"
+                <div class="feature-card {}">
+                    <div class="feature-header">
+                        <span class="status-icon">{}</span>
+                        <span class="feature-name">{}</span>
+                        {}
+                    </div>
+                    {}
+                    {}
+                </div>
+            "#, status_class, status_icon, feature.name, impl_badge, endpoint_html, notes_html));
+        }
+
+        features_html.push_str("</div></div>");
+    }
+
+    format!(r##"<!DOCTYPE html>
+<html>
+<head>
+    <title>ZFS Agent - Feature Coverage</title>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        :root {{
+            --bg-primary: #0f172a;
+            --bg-secondary: #1e293b;
+            --bg-card: #334155;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --accent-green: #22c55e;
+            --accent-blue: #3b82f6;
+            --accent-purple: #a855f7;
+            --accent-orange: #f97316;
+            --accent-yellow: #eab308;
+            --accent-gray: #64748b;
+        }}
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+            min-height: 100vh;
+        }}
+        .container {{
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }}
+        header {{
+            text-align: center;
+            margin-bottom: 3rem;
+            padding: 2rem;
+            background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-primary) 100%);
+            border-radius: 16px;
+            border: 1px solid var(--bg-card);
+        }}
+        h1 {{
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }}
+        .subtitle {{
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+        }}
+        .summary {{
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            margin-top: 1.5rem;
+            flex-wrap: wrap;
+        }}
+        .stat {{
+            background: var(--bg-card);
+            padding: 1rem 2rem;
+            border-radius: 12px;
+            text-align: center;
+        }}
+        .stat-value {{
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--accent-blue);
+        }}
+        .stat-value.green {{ color: var(--accent-green); }}
+        .stat-value.orange {{ color: var(--accent-orange); }}
+        .stat-label {{
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }}
+        .category {{
+            margin-bottom: 2rem;
+        }}
+        .category-header {{
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+            padding: 0.75rem 1rem;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+        }}
+        .category-icon {{
+            font-size: 1.5rem;
+        }}
+        .category-name {{
+            font-size: 1.25rem;
+            font-weight: 600;
+        }}
+        .category-count {{
+            margin-left: auto;
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+        }}
+        .features-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 1rem;
+        }}
+        .feature-card {{
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 1rem;
+            border: 1px solid transparent;
+            transition: all 0.2s ease;
+        }}
+        .feature-card:hover {{
+            border-color: var(--accent-blue);
+            transform: translateY(-2px);
+        }}
+        .feature-card.implemented {{
+            border-left: 3px solid var(--accent-green);
+        }}
+        .feature-card.planned {{
+            border-left: 3px solid var(--accent-gray);
+            opacity: 0.7;
+        }}
+        .feature-header {{
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+        }}
+        .status-icon {{
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            font-size: 0.75rem;
+        }}
+        .implemented .status-icon {{
+            background: var(--accent-green);
+            color: white;
+        }}
+        .planned .status-icon {{
+            background: var(--accent-gray);
+            color: white;
+        }}
+        .feature-name {{
+            font-weight: 600;
+            flex: 1;
+        }}
+        .impl-badge {{
+            font-size: 0.7rem;
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            text-transform: uppercase;
+            font-weight: 600;
+        }}
+        .impl-badge.libzetta {{ background: var(--accent-blue); color: white; }}
+        .impl-badge.ffi {{ background: var(--accent-purple); color: white; }}
+        .impl-badge.libzfs {{ background: var(--accent-orange); color: white; }}
+        .impl-badge.cli {{ background: var(--accent-yellow); color: black; }}
+        .impl-badge.planned {{ background: var(--accent-gray); color: white; }}
+        .endpoint {{
+            margin-top: 0.5rem;
+        }}
+        .endpoint code {{
+            font-size: 0.8rem;
+            background: var(--bg-card);
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            color: var(--accent-green);
+            font-family: 'Monaco', 'Menlo', monospace;
+        }}
+        .notes {{
+            margin-top: 0.5rem;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }}
+        .legend {{
+            display: flex;
+            justify-content: center;
+            gap: 1.5rem;
+            margin-top: 2rem;
+            flex-wrap: wrap;
+        }}
+        .legend-item {{
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }}
+        .links {{
+            margin-top: 2rem;
+            text-align: center;
+        }}
+        .links a {{
+            color: var(--accent-blue);
+            text-decoration: none;
+            margin: 0 1rem;
+        }}
+        .links a:hover {{
+            text-decoration: underline;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>ZFS Agent API</h1>
+            <p class="subtitle">Feature Coverage &amp; Implementation Status</p>
+            <div class="summary">
+                <div class="stat">
+                    <div class="stat-value">{}</div>
+                    <div class="stat-label">Total Features</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">{}</div>
+                    <div class="stat-label">Implemented</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value orange">{}</div>
+                    <div class="stat-label">Planned</div>
+                </div>
+            </div>
+            <div class="legend">
+                <div class="legend-item"><span class="impl-badge libzetta">libzetta</span> Library bindings</div>
+                <div class="legend-item"><span class="impl-badge ffi">FFI</span> Direct lzc_* calls</div>
+                <div class="legend-item"><span class="impl-badge libzfs">libzfs</span> libzfs FFI</div>
+                <div class="legend-item"><span class="impl-badge cli">CLI</span> Experimental</div>
+            </div>
+        </header>
+
+        {}
+
+        <div class="links">
+            <a href="/v1/docs">API Documentation</a>
+            <a href="/v1/features?format=json">JSON Format</a>
+            <a href="/v1/health">Health Check</a>
+        </div>
+    </div>
+</body>
+</html>"##,
+        data.summary.total,
+        data.summary.implemented,
+        data.summary.planned,
+        features_html
+    )
 }
 
 pub async fn list_pools_handler(zfs: ZfsManager) -> Result<impl Reply, Rejection> {
@@ -190,6 +537,41 @@ pub async fn delete_dataset_handler(name: String, zfs: ZfsManager) -> Result<imp
             message: format!("Dataset '{}' deleted successfully", name),
         })),
         Err(e) => Ok(error_response(&format!("Failed to delete dataset: {}", e))),
+    }
+}
+
+// =========================================================================
+// Dataset Properties Handlers (MF-002 Phase 2)
+// =========================================================================
+
+/// Get all properties of a dataset
+/// libzetta: ZfsEngine::read_properties()
+pub async fn get_dataset_properties_handler(
+    name: String,
+    zfs: ZfsManager,
+) -> Result<impl Reply, Rejection> {
+    match zfs.get_dataset_properties(&name).await {
+        Ok(props) => Ok(success_response(DatasetPropertiesResponse {
+            status: "success".to_string(),
+            properties: props,
+        })),
+        Err(e) => Ok(error_response(&format!("Failed to get dataset properties: {}", e))),
+    }
+}
+
+/// Set a property on a dataset
+/// **EXPERIMENTAL**: Uses CLI (`zfs set`) as libzetta/libzfs FFI lacks property setting.
+pub async fn set_dataset_property_handler(
+    name: String,
+    body: SetPropertyRequest,
+    zfs: ZfsManager,
+) -> Result<impl Reply, Rejection> {
+    match zfs.set_dataset_property(&name, &body.property, &body.value).await {
+        Ok(_) => Ok(success_response(ActionResponse {
+            status: "success".to_string(),
+            message: format!("Property '{}' set to '{}' on dataset '{}'", body.property, body.value, name),
+        })),
+        Err(e) => Ok(error_response(&format!("Failed to set property: {}", e))),
     }
 }
 
@@ -321,6 +703,105 @@ pub async fn import_pool_handler(
             message: format!("Pool '{}' imported successfully", body.name),
         })),
         Err(e) => Ok(error_response(&format!("Failed to import pool: {}", e))),
+    }
+}
+
+// =========================================================================
+// Snapshot Clone/Promote Handlers (MF-003 Phase 3)
+// FROM-SCRATCH implementation using libzetta-zfs-core-sys FFI
+// =========================================================================
+
+/// Clone a snapshot to create a new writable dataset
+/// FROM-SCRATCH: Uses lzc_clone() FFI directly
+///
+/// Path format: /v1/snapshots/{dataset}/{snapshot}/clone
+/// The dataset path can have multiple segments (e.g., tank/data/subdir)
+pub async fn clone_snapshot_handler(
+    snapshot_path: String,  // Full path: dataset/snapshot_name
+    body: CloneSnapshotRequest,
+    zfs: ZfsManager,
+) -> Result<impl Reply, Rejection> {
+    // Parse snapshot path (everything before last '/' is dataset, last segment is snapshot name)
+    if let Some(pos) = snapshot_path.rfind('/') {
+        let dataset = &snapshot_path[..pos];
+        let snapshot_name = &snapshot_path[pos+1..];
+        let full_snapshot = format!("{}@{}", dataset, snapshot_name);
+
+        match zfs.clone_snapshot(&full_snapshot, &body.target).await {
+            Ok(_) => Ok(success_response(CloneResponse {
+                status: "success".to_string(),
+                origin: full_snapshot,
+                clone: body.target,
+            })),
+            Err(e) => Ok(error_response(&format!("Failed to clone snapshot: {}", e))),
+        }
+    } else {
+        Ok(error_response("Invalid snapshot path: expected /snapshots/dataset/snapshot_name/clone"))
+    }
+}
+
+/// Promote a clone to an independent dataset
+/// FROM-SCRATCH: Uses lzc_promote() FFI directly
+///
+/// Path format: /v1/datasets/{path}/promote
+/// The dataset path can have multiple segments (e.g., tank/data-clone)
+pub async fn promote_dataset_handler(
+    clone_path: String,
+    zfs: ZfsManager,
+) -> Result<impl Reply, Rejection> {
+    match zfs.promote_dataset(&clone_path).await {
+        Ok(_) => Ok(success_response(PromoteResponse {
+            status: "success".to_string(),
+            dataset: clone_path.clone(),
+            message: format!("Dataset '{}' promoted successfully. Former parent is now a clone.", clone_path),
+        })),
+        Err(e) => Ok(error_response(&format!("Failed to promote dataset: {}", e))),
+    }
+}
+
+/// Rollback a dataset to a snapshot
+/// FROM-SCRATCH: Uses lzc_rollback_to() FFI directly
+///
+/// Safety levels:
+/// - Default: Only allows rollback to most recent snapshot
+/// - force_destroy_newer: Destroys intermediate snapshots (like -r)
+/// - force_destroy_newer + force_destroy_clones: Also destroys clones (like -R)
+///
+/// Path format: /v1/datasets/{path}/rollback
+pub async fn rollback_dataset_handler(
+    dataset: String,
+    body: RollbackRequest,
+    zfs: ZfsManager,
+) -> Result<impl Reply, Rejection> {
+    match zfs.rollback_dataset(
+        &dataset,
+        &body.snapshot,
+        body.force_destroy_newer,
+        body.force_destroy_clones,
+    ).await {
+        Ok(result) => Ok(success_response(RollbackResponse {
+            status: "success".to_string(),
+            dataset: dataset.clone(),
+            snapshot: body.snapshot,
+            message: format!("Dataset '{}' rolled back successfully", dataset),
+            destroyed_snapshots: result.destroyed_snapshots,
+            destroyed_clones: result.destroyed_clones,
+        })),
+        Err(RollbackError::InvalidRequest(msg)) => {
+            Ok(error_response(&format!("Invalid request: {}", msg)))
+        }
+        Err(RollbackError::Blocked { message, blocking_snapshots, blocking_clones }) => {
+            // Return structured blocked response with blocking items
+            Ok(success_response(RollbackBlockedResponse {
+                status: "error".to_string(),
+                message,
+                blocking_snapshots,
+                blocking_clones,
+            }))
+        }
+        Err(RollbackError::ZfsError(msg)) => {
+            Ok(error_response(&format!("Rollback failed: {}", msg)))
+        }
     }
 }
 

@@ -8,7 +8,7 @@ use warp::Filter;
 use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
 use zfs_management::ZfsManager;
-use models::{LastAction, CreatePool, CreateSnapshot, CreateDataset, CommandRequest, ExportPoolRequest, ImportPoolRequest};
+use models::{LastAction, CreatePool, CreateSnapshot, CreateDataset, CommandRequest, ExportPoolRequest, ImportPoolRequest, SetPropertyRequest, CloneSnapshotRequest, RollbackRequest};
 use handlers::*;
 use auth::*;
 use utils::with_action_tracking;
@@ -56,6 +56,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and(warp::path("openapi.yaml"))
         .and(warp::path::end())
         .and_then(openapi_handler);
+
+    // ZFS features discovery route (no auth required)
+    // GET /v1/features - List all features and implementation status
+    // Returns HTML by default, JSON if ?format=json
+    let zfs_features_route = warp::get()
+        .and(warp::path("features"))
+        .and(warp::path::end())
+        .and(warp::query::<HashMap<String, String>>())
+        .and_then(|query: HashMap<String, String>| {
+            let format = query.get("format").cloned();
+            zfs_features_handler(format)
+        });
 
     // Pool routes
     let pool_routes = {
@@ -225,7 +237,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 delete_snapshot_by_path_handler(tail.as_str().to_string(), zfs)
             });
 
-        list.or(create).or(delete)
+        // Clone route: POST /snapshots/{dataset}/{snapshot}/clone
+        // Creates a writable clone from a snapshot (MF-003 Phase 3)
+        let clone = warp::post()
+            .and(warp::path("snapshots"))
+            .and(warp::path::tail())
+            .and(warp::body::json())
+            .and(with_action_tracking("clone_snapshot", last_action.clone()))
+            .and(zfs.clone())
+            .and(api_key_check.clone())
+            .and_then(|tail: warp::path::Tail, body: CloneSnapshotRequest, zfs: ZfsManager, _| async move {
+                let path = tail.as_str();
+                // Check if path ends with /clone
+                if let Some(snapshot_path) = path.strip_suffix("/clone") {
+                    clone_snapshot_handler(snapshot_path.to_string(), body, zfs).await
+                } else {
+                    Err(warp::reject::not_found())
+                }
+            });
+
+        list.or(clone).or(create).or(delete)
     };
 
     // Dataset routes
@@ -233,10 +264,87 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let list = warp::get()
             .and(warp::path("datasets"))
             .and(warp::path::param())
+            .and(warp::path::end())
             .and(with_action_tracking("list_datasets", last_action.clone()))
             .and(zfs.clone())
             .and(api_key_check.clone())
             .and_then(|pool: String, zfs: ZfsManager, _: ()| list_datasets_handler(pool, zfs));
+
+        // GET /datasets/{name}/properties - get dataset properties
+        // Matches paths like /datasets/pool/properties or /datasets/pool/child/properties
+        let get_properties = warp::get()
+            .and(warp::path("datasets"))
+            .and(warp::path::tail())
+            .and(with_action_tracking("get_dataset_properties", last_action.clone()))
+            .and(zfs.clone())
+            .and(api_key_check.clone())
+            .and_then(|tail: warp::path::Tail, zfs: ZfsManager, _: ()| async move {
+                let path = tail.as_str();
+                // Check if path ends with /properties
+                if let Some(dataset) = path.strip_suffix("/properties") {
+                    get_dataset_properties_handler(dataset.to_string(), zfs).await
+                } else {
+                    // Reject so other routes can match
+                    Err(warp::reject::not_found())
+                }
+            });
+
+        // PUT /datasets/{name}/properties - set a dataset property
+        // **EXPERIMENTAL**: Uses CLI as FFI lacks property setting
+        let set_property = warp::put()
+            .and(warp::path("datasets"))
+            .and(warp::path::tail())
+            .and(warp::body::json())
+            .and(with_action_tracking("set_dataset_property", last_action.clone()))
+            .and(zfs.clone())
+            .and(api_key_check.clone())
+            .and_then(|tail: warp::path::Tail, body: SetPropertyRequest, zfs: ZfsManager, _: ()| async move {
+                let path = tail.as_str();
+                // Check if path ends with /properties
+                if let Some(dataset) = path.strip_suffix("/properties") {
+                    set_dataset_property_handler(dataset.to_string(), body, zfs).await
+                } else {
+                    Err(warp::reject::not_found())
+                }
+            });
+
+        // POST /datasets/{path}/promote - promote a clone to independent dataset
+        // FROM-SCRATCH implementation using lzc_promote() FFI (MF-003 Phase 3)
+        let promote = warp::post()
+            .and(warp::path("datasets"))
+            .and(warp::path::tail())
+            .and(with_action_tracking("promote_dataset", last_action.clone()))
+            .and(zfs.clone())
+            .and(api_key_check.clone())
+            .and_then(|tail: warp::path::Tail, zfs: ZfsManager, _: ()| async move {
+                let path = tail.as_str();
+                // Check if path ends with /promote
+                if let Some(clone_path) = path.strip_suffix("/promote") {
+                    promote_dataset_handler(clone_path.to_string(), zfs).await
+                } else {
+                    Err(warp::reject::not_found())
+                }
+            });
+
+        // POST /datasets/{path}/rollback - rollback dataset to a snapshot
+        // FROM-SCRATCH implementation using lzc_rollback_to() FFI (MF-003 Phase 3)
+        // Safety levels: default (most recent only), force_destroy_newer, force_destroy_clones
+        let rollback = warp::post()
+            .and(warp::path("datasets"))
+            .and(warp::path::tail())
+            .and(warp::body::json())
+            .and(with_action_tracking("rollback_dataset", last_action.clone()))
+            .and(zfs.clone())
+            .and(api_key_check.clone())
+            .and_then(|tail: warp::path::Tail, body: RollbackRequest, zfs: ZfsManager, _: ()| async move {
+                let path = tail.as_str();
+                // Check if path ends with /rollback
+                if let Some(dataset_path) = path.strip_suffix("/rollback") {
+                    rollback_dataset_handler(dataset_path.to_string(), body, zfs).await
+                } else {
+                    Err(warp::reject::not_found())
+                }
+            });
 
         let delete = warp::delete()
             .and(warp::path("datasets"))
@@ -254,7 +362,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and(api_key_check.clone())
             .and_then(|body: CreateDataset, zfs: ZfsManager, _: ()| create_dataset_handler(body, zfs));
 
-        list.or(create).or(delete)
+        list.or(get_properties).or(set_property).or(promote).or(rollback).or(create).or(delete)
     };
 
     // Command routes
@@ -275,6 +383,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         health_routes
             .or(docs_route)
             .or(openapi_route)
+            .or(zfs_features_route)
             .or(pool_routes)
             .or(snapshot_routes)
             .or(dataset_routes)
@@ -285,6 +394,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Server starting on port: 9876");
     println!("API base URL: http://localhost:9876/v1");
     println!("API docs: http://localhost:9876/v1/docs");
+    println!("ZFS features: http://localhost:9876/v1/features");
     warp::serve(v1_routes).run(([0, 0, 0, 0], 9876)).await;
 
     Ok(())

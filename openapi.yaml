@@ -341,6 +341,118 @@ components:
         - name
         - kind
 
+    DatasetPropertiesResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: success
+        name:
+          type: string
+          example: tank/data
+        dataset_type:
+          type: string
+          enum: [filesystem, volume, snapshot, bookmark, unknown]
+          example: filesystem
+        available:
+          type: integer
+          format: int64
+          nullable: true
+          description: Available space in bytes
+        used:
+          type: integer
+          format: int64
+          nullable: true
+          description: Used space in bytes
+        referenced:
+          type: integer
+          format: int64
+          nullable: true
+          description: Referenced space in bytes
+        compression:
+          type: string
+          nullable: true
+          example: lz4
+        compression_ratio:
+          type: number
+          format: double
+          nullable: true
+          example: 1.5
+        readonly:
+          type: boolean
+          nullable: true
+        creation:
+          type: integer
+          format: int64
+          nullable: true
+          description: Creation timestamp
+        quota:
+          type: integer
+          format: int64
+          nullable: true
+          description: Quota in bytes (0 = none)
+        reservation:
+          type: integer
+          format: int64
+          nullable: true
+        mountpoint:
+          type: string
+          nullable: true
+          example: /tank/data
+        mounted:
+          type: boolean
+          nullable: true
+        checksum:
+          type: string
+          nullable: true
+          example: on
+        copies:
+          type: integer
+          nullable: true
+          example: 1
+        atime:
+          type: boolean
+          nullable: true
+        exec:
+          type: boolean
+          nullable: true
+        setuid:
+          type: boolean
+          nullable: true
+        dedup:
+          type: string
+          nullable: true
+          example: off
+        sync:
+          type: string
+          nullable: true
+          example: standard
+        user_properties:
+          type: object
+          additionalProperties:
+            type: string
+          description: User-defined properties
+      required:
+        - status
+        - name
+        - dataset_type
+
+    SetPropertyRequest:
+      type: object
+      description: "**EXPERIMENTAL**: Set property request (uses CLI fallback)"
+      properties:
+        property:
+          type: string
+          description: Property name (e.g., compression, quota, user:custom)
+          example: compression
+        value:
+          type: string
+          description: Property value
+          example: lz4
+      required:
+        - property
+        - value
+
     # Snapshot types
     ListResponse:
       type: object
@@ -366,6 +478,243 @@ components:
           example: backup-2025-01-01
       required:
         - snapshot_name
+
+    # Clone/Promote types (MF-003 Phase 3)
+    CloneSnapshotRequest:
+      type: object
+      description: Request to clone a snapshot
+      properties:
+        target:
+          type: string
+          description: Full path for the new clone dataset
+          example: tank/data-clone
+      required:
+        - target
+
+    CloneResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: success
+        origin:
+          type: string
+          description: Source snapshot path
+          example: tank/data@backup-001
+        clone:
+          type: string
+          description: New clone dataset path
+          example: tank/data-clone
+      required:
+        - status
+        - origin
+        - clone
+
+    PromoteResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: success
+        dataset:
+          type: string
+          description: Promoted dataset path
+          example: tank/data-clone
+        message:
+          type: string
+          description: Description of the operation result
+          example: "Dataset 'tank/data-clone' promoted successfully. Former parent is now a clone."
+      required:
+        - status
+        - dataset
+        - message
+
+    # Rollback types (MF-003 Phase 3)
+    RollbackRequest:
+      type: object
+      description: |
+        Request to rollback a dataset to a snapshot.
+
+        Safety levels:
+        - Default: Only allows rollback to most recent snapshot
+        - force_destroy_newer: Destroys intermediate snapshots (like zfs rollback -r)
+        - force_destroy_newer + force_destroy_clones: Also destroys clones (like zfs rollback -R)
+
+        Note: force_destroy_clones requires force_destroy_newer to be true.
+      properties:
+        snapshot:
+          type: string
+          description: Target snapshot name (without @)
+          example: backup-001
+        force_destroy_newer:
+          type: boolean
+          default: false
+          description: Destroy snapshots newer than target (like -r flag)
+        force_destroy_clones:
+          type: boolean
+          default: false
+          description: Also destroy clones of newer snapshots (like -R flag). Requires force_destroy_newer.
+      required:
+        - snapshot
+
+    RollbackResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: success
+        dataset:
+          type: string
+          description: Dataset that was rolled back
+          example: tank/data
+        snapshot:
+          type: string
+          description: Snapshot rolled back to
+          example: backup-001
+        message:
+          type: string
+          description: Description of the operation result
+          example: "Dataset 'tank/data' rolled back successfully"
+        destroyed_snapshots:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: List of snapshots destroyed (if force_destroy_newer was used)
+          example: ["tank/data@backup-002", "tank/data@backup-003"]
+        destroyed_clones:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: List of clones destroyed (if force_destroy_clones was used)
+          example: ["tank/data-clone"]
+      required:
+        - status
+        - dataset
+        - snapshot
+        - message
+
+    RollbackBlockedResponse:
+      type: object
+      description: Returned when rollback is blocked by newer snapshots or clones
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          description: Description of what is blocking the rollback
+          example: "Cannot rollback to 'tank/data@backup-001': 2 newer snapshot(s) exist"
+        blocking_snapshots:
+          type: array
+          items:
+            type: string
+          description: Snapshots that are blocking the rollback
+          example: ["tank/data@backup-002", "tank/data@backup-003"]
+        blocking_clones:
+          type: array
+          items:
+            type: string
+          description: Clones that are blocking the rollback
+          example: ["tank/data-clone"]
+      required:
+        - status
+        - message
+        - blocking_snapshots
+        - blocking_clones
+
+    # ZFS Features Discovery types
+    ImplementationMethod:
+      type: string
+      enum: [libzetta, ffi, libzfs, cli_experimental, planned]
+      description: |
+        How the feature is implemented:
+        - libzetta: Uses libzetta library bindings
+        - ffi: FROM-SCRATCH FFI implementation (lzc_* functions)
+        - libzfs: Uses libzfs FFI bindings directly
+        - cli_experimental: EXPERIMENTAL fallback to CLI (zfs/zpool commands)
+        - planned: Not yet implemented
+
+    FeatureCategory:
+      type: string
+      enum: [pool, dataset, snapshot, property, replication, system]
+      description: Category of ZFS feature
+
+    ZfsFeatureInfo:
+      type: object
+      description: Information about a single ZFS feature
+      properties:
+        name:
+          type: string
+          description: Feature name
+          example: Clone snapshot
+        category:
+          $ref: '#/components/schemas/FeatureCategory'
+        implemented:
+          type: boolean
+          description: Whether the feature is currently implemented
+          example: true
+        implementation:
+          $ref: '#/components/schemas/ImplementationMethod'
+        endpoint:
+          type: string
+          nullable: true
+          description: API endpoint for this feature (if implemented)
+          example: "POST /v1/snapshots/{dataset}/{name}/clone"
+        notes:
+          type: string
+          nullable: true
+          description: Additional notes about the implementation
+          example: "FROM-SCRATCH lzc_clone() FFI"
+      required:
+        - name
+        - category
+        - implemented
+
+    FeatureSummary:
+      type: object
+      description: Summary counts of features
+      properties:
+        total:
+          type: integer
+          description: Total number of features tracked
+          example: 32
+        implemented:
+          type: integer
+          description: Number of implemented features
+          example: 27
+        planned:
+          type: integer
+          description: Number of planned features
+          example: 5
+      required:
+        - total
+        - implemented
+        - planned
+
+    ZfsFeaturesResponse:
+      type: object
+      description: Response listing all ZFS features and their implementation status
+      properties:
+        status:
+          type: string
+          example: success
+        version:
+          type: string
+          description: API version
+          example: "0.3.3"
+        summary:
+          $ref: '#/components/schemas/FeatureSummary'
+        features:
+          type: array
+          items:
+            $ref: '#/components/schemas/ZfsFeatureInfo'
+      required:
+        - status
+        - version
+        - summary
+        - features
 
     # Command types
     CommandRequest:
@@ -420,6 +769,51 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
+
+  /features:
+    get:
+      summary: List ZFS features
+      description: |
+        Returns all ZFS features with their implementation status.
+
+        This endpoint shows:
+        - Which features are implemented vs planned
+        - How each feature is implemented (libzetta, FFI, CLI, etc.)
+        - Which API endpoint corresponds to each feature
+        - Any notes about the implementation
+
+        No authentication required - this is an informational endpoint.
+      operationId: listZfsFeatures
+      security: []
+      tags:
+        - System
+      responses:
+        '200':
+          description: List of all ZFS features
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ZfsFeaturesResponse'
+              example:
+                status: success
+                version: "0.3.3"
+                summary:
+                  total: 32
+                  implemented: 27
+                  planned: 5
+                features:
+                  - name: Clone snapshot
+                    category: snapshot
+                    implemented: true
+                    implementation: ffi
+                    endpoint: "POST /v1/snapshots/{dataset}/{name}/clone"
+                    notes: "FROM-SCRATCH lzc_clone() FFI"
+                  - name: Send snapshot
+                    category: replication
+                    implemented: false
+                    implementation: planned
+                    endpoint: null
+                    notes: "zfs send equivalent"
 
   /pools:
     get:
@@ -753,6 +1147,84 @@ paths:
               schema:
                 $ref: '#/components/schemas/ActionResponse'
 
+  /datasets/{path}/properties:
+    get:
+      summary: Get dataset properties
+      description: Returns all properties of a dataset (filesystem, volume, or snapshot)
+      operationId: getDatasetProperties
+      tags:
+        - Datasets
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Full dataset path (e.g., pool/dataset)
+      responses:
+        '200':
+          description: Dataset properties
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatasetPropertiesResponse'
+        '404':
+          description: Dataset not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    put:
+      summary: Set dataset property
+      description: |
+        Set a property on a dataset.
+
+        **EXPERIMENTAL**: Uses CLI (`zfs set`) as libzetta/libzfs FFI lacks property setting bindings.
+
+        Common properties:
+        - `compression`: lz4, gzip, off
+        - `quota`: Size limit (e.g., "10G", "100M", "0" for none)
+        - `readonly`: on/off
+        - `atime`: on/off
+        - `sync`: standard/always/disabled
+        - `user:custom`: User-defined properties
+      operationId: setDatasetProperty
+      tags:
+        - Datasets
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Full dataset path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetPropertyRequest'
+      responses:
+        '200':
+          description: Property set
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResponse'
+        '400':
+          description: Invalid property or value
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Dataset not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /snapshots/{dataset}:
     get:
       summary: List snapshots
@@ -829,6 +1301,152 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ActionResponse'
+
+  /snapshots/{dataset}/{snapshot}/clone:
+    post:
+      summary: Clone snapshot
+      description: |
+        Create a writable clone from a snapshot.
+
+        The clone shares all blocks with the original snapshot initially (copy-on-write).
+        As you modify the clone, only changed blocks consume additional space.
+
+        **Implementation**: FROM-SCRATCH using `lzc_clone()` FFI (libzetta doesn't expose this).
+      operationId: cloneSnapshot
+      tags:
+        - Snapshots
+      parameters:
+        - name: dataset
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Dataset path (e.g., tank/data)
+        - name: snapshot
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Snapshot name (e.g., backup-001)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CloneSnapshotRequest'
+      responses:
+        '200':
+          description: Clone created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CloneResponse'
+        '400':
+          description: Invalid request (e.g., snapshot not found, target exists)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /datasets/{path}/promote:
+    post:
+      summary: Promote clone
+      description: |
+        Promote a clone to an independent dataset.
+
+        After promotion:
+        - The clone becomes the parent dataset
+        - Snapshots up to and including the origin snapshot transfer to the promoted dataset
+        - The former parent becomes a clone of the transferred snapshot
+
+        **Implementation**: FROM-SCRATCH using `lzc_promote()` FFI (libzetta doesn't expose this).
+
+        **Note**: If there are snapshot name collisions, the operation will fail with EEXIST
+        and report the conflicting snapshot name.
+      operationId: promoteDataset
+      tags:
+        - Datasets
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Clone dataset path (e.g., tank/data-clone)
+      responses:
+        '200':
+          description: Clone promoted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromoteResponse'
+        '400':
+          description: Invalid request (e.g., not a clone, snapshot name collision)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Dataset not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /datasets/{path}/rollback:
+    post:
+      summary: Rollback dataset
+      description: |
+        Rollback a dataset to a previous snapshot.
+
+        **Safety levels**:
+        - Default: Only allows rollback to most recent snapshot
+        - `force_destroy_newer: true`: Destroys intermediate snapshots (like `zfs rollback -r`)
+        - `force_destroy_newer: true` + `force_destroy_clones: true`: Also destroys clones (like `zfs rollback -R`)
+
+        **Note**: `force_destroy_clones` requires `force_destroy_newer` to be true.
+
+        **Warning**: This is a destructive operation. All data changes since the snapshot will be lost.
+        If `force_destroy_newer` is used, newer snapshots will be permanently destroyed.
+
+        **Implementation**: FROM-SCRATCH using `lzc_rollback_to()` FFI (libzetta doesn't expose this).
+      operationId: rollbackDataset
+      tags:
+        - Datasets
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Dataset path (e.g., tank/data)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RollbackRequest'
+      responses:
+        '200':
+          description: Dataset rolled back successfully
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/RollbackResponse'
+                  - $ref: '#/components/schemas/RollbackBlockedResponse'
+        '400':
+          description: Invalid request (e.g., force_destroy_clones without force_destroy_newer)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Dataset or snapshot not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /command:
     post:

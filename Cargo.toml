@@ -12,4 +12,6 @@ uuid = { version = "1.0", features = ["v4"] }
 rand = "0.8"
 libzetta = "0.5.0"
 libzfs = "0.6.16"
+libzetta-zfs-core-sys = "0.5.2"  # FFI bindings for lzc_clone, lzc_promote
+libc = "0.2"                      # For CString FFI
 dirs = "5.0"
