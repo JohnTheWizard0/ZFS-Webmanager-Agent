@@ -492,10 +492,9 @@ test_scrub_stop() {
     if is_success "$response"; then
         log_pass
     else
-        # No scrub running is acceptable
-        if echo "$response" | grep -q "no.*scrub\|not.*running"; then
-            log_info "No scrub to stop (acceptable)"
-            log_pass
+        # Scrub already finished is expected on small/fast pools - treat as warning
+        if echo "$response" | grep -q "NoActiveScrubs\|no.*scrub\|not.*running"; then
+            log_skip "Scrub already finished (timing - small test pool)"
         else
             log_fail "$(json_field "$response" "message")"
         fi
