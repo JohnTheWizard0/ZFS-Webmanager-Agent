@@ -508,30 +508,54 @@ impl ZfsFeaturesResponse {
                 endpoint: Some("GET /v1/datasets/{path}/properties".to_string()),
                 notes: Some("Access time tracking".to_string()),
             },
-            // Replication (3 planned)
+            // Replication (6 implemented)
             ZfsFeatureInfo {
-                name: "Send snapshot".to_string(),
+                name: "Send snapshot to file".to_string(),
                 category: FeatureCategory::Replication,
-                implemented: false,
-                implementation: Some(ImplementationMethod::Planned),
-                endpoint: None,
-                notes: Some("zfs send equivalent".to_string()),
+                implemented: true,
+                implementation: Some(ImplementationMethod::CliExperimental),
+                endpoint: Some("POST /v1/snapshots/{ds}/{snap}/send".to_string()),
+                notes: Some("Full/incremental, all flags supported".to_string()),
             },
             ZfsFeatureInfo {
-                name: "Receive snapshot".to_string(),
+                name: "Receive from file".to_string(),
                 category: FeatureCategory::Replication,
-                implemented: false,
-                implementation: Some(ImplementationMethod::Planned),
-                endpoint: None,
-                notes: Some("zfs receive equivalent".to_string()),
+                implemented: true,
+                implementation: Some(ImplementationMethod::CliExperimental),
+                endpoint: Some("POST /v1/datasets/{path}/receive".to_string()),
+                notes: Some("Force option supported".to_string()),
+            },
+            ZfsFeatureInfo {
+                name: "Replicate to pool".to_string(),
+                category: FeatureCategory::Replication,
+                implemented: true,
+                implementation: Some(ImplementationMethod::CliExperimental),
+                endpoint: Some("POST /v1/replication/{ds}/{snap}".to_string()),
+                notes: Some("Direct pipe, both pools busy".to_string()),
+            },
+            ZfsFeatureInfo {
+                name: "Estimate send size".to_string(),
+                category: FeatureCategory::Replication,
+                implemented: true,
+                implementation: Some(ImplementationMethod::CliExperimental),
+                endpoint: Some("GET /v1/snapshots/{ds}/{snap}/send-size".to_string()),
+                notes: Some("zfs send -nP dry-run".to_string()),
+            },
+            ZfsFeatureInfo {
+                name: "Task status".to_string(),
+                category: FeatureCategory::Replication,
+                implemented: true,
+                implementation: None,
+                endpoint: Some("GET /v1/tasks/{task_id}".to_string()),
+                notes: Some("Pool busy tracking, 1hr expiry".to_string()),
             },
             ZfsFeatureInfo {
                 name: "Incremental send".to_string(),
                 category: FeatureCategory::Replication,
-                implemented: false,
-                implementation: Some(ImplementationMethod::Planned),
-                endpoint: None,
-                notes: Some("Delta between snapshots".to_string()),
+                implemented: true,
+                implementation: Some(ImplementationMethod::CliExperimental),
+                endpoint: Some("POST /v1/snapshots/{ds}/{snap}/send".to_string()),
+                notes: Some("from_snapshot param for delta".to_string()),
             },
             // System features (not ZFS-specific, no implementation label)
             ZfsFeatureInfo {
@@ -582,6 +606,182 @@ impl ZfsFeaturesResponse {
             features,
         }
     }
+}
+
+// ============================================================================
+// Replication / Task System (MF-005)
+// ============================================================================
+
+/// Task status for async operations
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStatus {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+}
+
+/// Task operation type
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskOperation {
+    Send,
+    Receive,
+    Replicate,
+}
+
+/// Progress information for running tasks
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskProgress {
+    pub bytes_processed: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes_total: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub percent: Option<f32>,
+}
+
+/// Complete task state
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskState {
+    pub task_id: String,
+    pub status: TaskStatus,
+    pub operation: TaskOperation,
+    pub pools_involved: Vec<String>,
+    pub started_at: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress: Option<TaskProgress>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Task response returned to client
+#[derive(Debug, Serialize)]
+pub struct TaskResponse {
+    pub status: String,
+    pub task_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// Task status response (for GET /tasks/{id})
+#[derive(Debug, Serialize)]
+pub struct TaskStatusResponse {
+    pub status: String,  // "pending", "running", "completed", "failed"
+    pub task_id: String,
+    pub operation: TaskOperation,
+    pub started_at: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress: Option<TaskProgress>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl From<&TaskState> for TaskStatusResponse {
+    fn from(state: &TaskState) -> Self {
+        TaskStatusResponse {
+            status: match state.status {
+                TaskStatus::Pending => "pending".to_string(),
+                TaskStatus::Running => "running".to_string(),
+                TaskStatus::Completed => "completed".to_string(),
+                TaskStatus::Failed => "failed".to_string(),
+            },
+            task_id: state.task_id.clone(),
+            operation: state.operation.clone(),
+            started_at: state.started_at,
+            completed_at: state.completed_at,
+            progress: state.progress.clone(),
+            result: state.result.clone(),
+            error: state.error.clone(),
+        }
+    }
+}
+
+// ============================================================================
+// Replication Request Types (MF-005)
+// ============================================================================
+
+/// Request to send snapshot to file
+#[derive(Debug, Deserialize)]
+pub struct SendSnapshotRequest {
+    pub output_file: String,
+    #[serde(default)]
+    pub from_snapshot: Option<String>,  // incremental base
+    #[serde(default)]
+    pub recursive: bool,
+    #[serde(default)]
+    pub properties: bool,
+    #[serde(default)]
+    pub raw: bool,
+    #[serde(default)]
+    pub compressed: bool,
+    #[serde(default)]
+    pub large_blocks: bool,
+    #[serde(default)]
+    pub dry_run: bool,
+    #[serde(default)]
+    pub overwrite: bool,
+}
+
+/// Request to receive from file
+#[derive(Debug, Deserialize)]
+pub struct ReceiveSnapshotRequest {
+    pub input_file: String,
+    #[serde(default)]
+    pub force: bool,
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+/// Request to replicate snapshot to another pool
+#[derive(Debug, Deserialize)]
+pub struct ReplicateSnapshotRequest {
+    pub target_dataset: String,
+    #[serde(default)]
+    pub from_snapshot: Option<String>,  // incremental base
+    #[serde(default)]
+    pub recursive: bool,
+    #[serde(default)]
+    pub properties: bool,
+    #[serde(default)]
+    pub raw: bool,
+    #[serde(default)]
+    pub compressed: bool,
+    #[serde(default)]
+    pub force: bool,
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+/// Query params for send size estimation
+#[derive(Debug, Deserialize)]
+pub struct SendSizeQuery {
+    #[serde(default)]
+    pub from: Option<String>,
+    #[serde(default)]
+    pub recursive: bool,
+    #[serde(default)]
+    pub raw: bool,
+}
+
+/// Response for send size estimation
+#[derive(Debug, Serialize)]
+pub struct SendSizeResponse {
+    pub status: String,
+    pub snapshot: String,
+    pub estimated_bytes: u64,
+    pub estimated_human: String,
+    pub incremental: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_snapshot: Option<String>,
 }
 
 // ============================================================================

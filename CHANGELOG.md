@@ -10,6 +10,33 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ## [Unreleased]
 
 ### Added
+- `src/task_manager.rs` — NEW: Async task management (MF-005 Replication)
+  - `TaskManager` — Pool busy tracking, task creation, progress updates
+  - `TaskState` — Task status with progress and result tracking
+  - Auto-expiry of completed tasks (1 hour)
+  - Both source AND target pools marked busy during replication
+- `src/zfs_management.rs` — Replication operations via CLI (MF-005)
+  - `send_snapshot_to_file()` — Full/incremental send with all flags
+  - `receive_snapshot_from_file()` — Receive with force option
+  - `replicate_snapshot()` — Direct pipe send→receive
+  - `get_pool_from_path()` — Pool extraction helper
+- `src/handlers.rs` — Replication HTTP handlers
+  - `get_task_status_handler` — Task status lookup
+  - `send_size_handler` — Size estimation via `zfs send -nP`
+  - `send_snapshot_handler` — Send to file with task tracking
+  - `receive_snapshot_handler` — Receive from file with task tracking
+  - `replicate_snapshot_handler` — Direct replication with both pools busy
+- `src/models.rs` — Replication request/response types
+  - `TaskStatus`, `TaskOperation`, `TaskProgress`, `TaskState`
+  - `TaskResponse`, `TaskStatusResponse`
+  - `SendSnapshotRequest`, `ReceiveSnapshotRequest`, `ReplicateSnapshotRequest`
+  - `SendSizeQuery`, `SendSizeResponse`
+- `src/main.rs` — Replication API routes
+  - `GET /v1/tasks/{task_id}` — Task status
+  - `GET /v1/snapshots/{ds}/{snap}/send-size` — Size estimation
+  - `POST /v1/snapshots/{ds}/{snap}/send` — Send to file
+  - `POST /v1/datasets/{path}/receive` — Receive from file
+  - `POST /v1/replication/{ds}/{snap}` — Direct pool-to-pool replication
 - `src/zfs_management.rs` — Dataset properties operations (MF-002 Phase 2)
   - `get_dataset_properties()` — via libzetta `ZfsEngine::read_properties()`
   - `set_dataset_property()` — **EXPERIMENTAL** via CLI (`zfs set`)

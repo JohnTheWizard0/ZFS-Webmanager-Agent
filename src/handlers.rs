@@ -1,4 +1,5 @@
 use crate::models::*;
+use crate::task_manager::TaskManager;
 use crate::utils::{success_response, error_response};
 use crate::zfs_management::{ZfsManager, RollbackError};
 use warp::{Rejection, Reply};
@@ -825,7 +826,7 @@ pub async fn execute_command_handler(
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
             let combined_output = format!("{}{}", stdout, stderr);
-            
+
             Ok(success_response(CommandResponse {
                 status: "success".to_string(),
                 output: combined_output,
@@ -833,5 +834,447 @@ pub async fn execute_command_handler(
             }))
         }
         Err(e) => Ok(error_response(&format!("Failed to execute command: {}", e))),
+    }
+}
+
+// =========================================================================
+// Task Management Handlers (MF-005 Replication)
+// =========================================================================
+
+/// Get task status by task_id
+/// GET /v1/tasks/{task_id}
+pub async fn get_task_status_handler(
+    task_id: String,
+    task_manager: TaskManager,
+) -> Result<impl Reply, Rejection> {
+    // Cleanup expired tasks first
+    task_manager.cleanup_expired();
+
+    match task_manager.get_task(&task_id) {
+        Some(task) => Ok(success_response(TaskStatusResponse::from(&task))),
+        None => Ok(error_response(&format!("Task '{}' not found", task_id))),
+    }
+}
+
+/// Estimate send size for a snapshot
+/// GET /v1/snapshots/{dataset}/{snapshot}/send-size
+/// Uses `zfs send -nP` CLI for size estimation
+pub async fn send_size_handler(
+    snapshot_path: String,  // dataset/snapshot_name
+    query: SendSizeQuery,
+    _zfs: ZfsManager,
+) -> Result<impl Reply, Rejection> {
+    // Parse snapshot path
+    if let Some(pos) = snapshot_path.rfind('/') {
+        let dataset = &snapshot_path[..pos];
+        let snapshot_name = &snapshot_path[pos+1..];
+        let full_snapshot = format!("{}@{}", dataset, snapshot_name);
+
+        // Build zfs send -nP command
+        let mut args = vec![
+            "send".to_string(),
+            "-n".to_string(),  // dry-run
+            "-P".to_string(),  // parseable output
+        ];
+
+        // Add raw flag if requested
+        if query.raw {
+            args.push("-w".to_string());
+        }
+
+        // Add recursive flag if requested
+        if query.recursive {
+            args.push("-R".to_string());
+        }
+
+        // Add incremental from if specified
+        let incremental = query.from.is_some();
+        let from_snapshot = if let Some(ref from) = query.from {
+            // from can be just snapshot name or full path
+            let from_full = if from.contains('@') {
+                from.clone()
+            } else {
+                format!("{}@{}", dataset, from)
+            };
+            args.push("-i".to_string());
+            args.push(from_full.clone());
+            Some(from_full)
+        } else {
+            None
+        };
+
+        args.push(full_snapshot.clone());
+
+        // Execute zfs send -nP
+        let output = Command::new("zfs")
+            .args(&args)
+            .output();
+
+        match output {
+            Ok(out) => {
+                if out.status.success() {
+                    // Parse output: looking for "size\t<bytes>" line
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    let mut estimated_bytes: u64 = 0;
+
+                    for line in stdout.lines() {
+                        if line.starts_with("size") {
+                            if let Some(size_str) = line.split_whitespace().nth(1) {
+                                estimated_bytes = size_str.parse().unwrap_or(0);
+                            }
+                        }
+                    }
+
+                    // Format human-readable size
+                    let estimated_human = format_bytes(estimated_bytes);
+
+                    Ok(success_response(SendSizeResponse {
+                        status: "success".to_string(),
+                        snapshot: full_snapshot,
+                        estimated_bytes,
+                        estimated_human,
+                        incremental,
+                        from_snapshot,
+                    }))
+                } else {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    Ok(error_response(&format!("zfs send failed: {}", stderr.trim())))
+                }
+            }
+            Err(e) => Ok(error_response(&format!("Failed to execute zfs send: {}", e))),
+        }
+    } else {
+        Ok(error_response("Invalid snapshot path: expected /snapshots/dataset/snapshot_name/send-size"))
+    }
+}
+
+/// Format bytes into human-readable string (e.g., "1.23 GB")
+fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    const TB: u64 = GB * 1024;
+
+    if bytes >= TB {
+        format!("{:.2} TB", bytes as f64 / TB as f64)
+    } else if bytes >= GB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.2} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
+/// Send snapshot to file
+/// POST /v1/snapshots/{dataset}/{snapshot}/send
+pub async fn send_snapshot_handler(
+    snapshot_path: String,  // dataset/snapshot_name
+    body: SendSnapshotRequest,
+    zfs: ZfsManager,
+    task_manager: TaskManager,
+) -> Result<impl Reply, Rejection> {
+    // Parse snapshot path
+    if let Some(pos) = snapshot_path.rfind('/') {
+        let dataset = &snapshot_path[..pos];
+        let snapshot_name = &snapshot_path[pos+1..];
+        let full_snapshot = format!("{}@{}", dataset, snapshot_name);
+
+        // Check pool busy state first
+        let pool = ZfsManager::get_pool_from_path(&full_snapshot);
+        if let Some(busy_task) = task_manager.is_pool_busy(&pool) {
+            return Ok(error_response(&format!("Pool '{}' is busy with task '{}'", pool, busy_task)));
+        }
+
+        // Dry run just returns estimated size
+        if body.dry_run {
+            // Use CLI for dry-run size estimation
+            let mut args = vec!["send", "-n", "-P"];
+            if body.raw { args.push("-w"); }
+            if body.recursive { args.push("-R"); }
+            args.push(&full_snapshot);
+
+            let output = Command::new("zfs").args(&args).output();
+            match output {
+                Ok(out) if out.status.success() => {
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    let mut bytes: u64 = 0;
+                    for line in stdout.lines() {
+                        if line.starts_with("size") {
+                            if let Some(s) = line.split_whitespace().nth(1) {
+                                bytes = s.parse().unwrap_or(0);
+                            }
+                        }
+                    }
+                    return Ok(success_response(SendSizeResponse {
+                        status: "success".to_string(),
+                        snapshot: full_snapshot,
+                        estimated_bytes: bytes,
+                        estimated_human: format_bytes(bytes),
+                        incremental: body.from_snapshot.is_some(),
+                        from_snapshot: body.from_snapshot,
+                    }));
+                }
+                Ok(out) => {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    return Ok(error_response(&format!("Dry run failed: {}", stderr.trim())));
+                }
+                Err(e) => {
+                    return Ok(error_response(&format!("Failed to estimate: {}", e)));
+                }
+            }
+        }
+
+        // Create task
+        let task_id = match task_manager.create_task(
+            crate::models::TaskOperation::Send,
+            vec![pool.clone()],
+        ) {
+            Ok(id) => id,
+            Err((pool, task)) => {
+                return Ok(error_response(&format!("Pool '{}' is busy with task '{}'", pool, task)));
+            }
+        };
+
+        // Mark task running
+        task_manager.mark_running(&task_id);
+
+        // Execute send operation
+        let from_snap = body.from_snapshot.as_deref();
+        let result = zfs.send_snapshot_to_file(
+            &full_snapshot,
+            &body.output_file,
+            from_snap,
+            body.recursive,
+            body.properties,
+            body.raw,
+            body.compressed,
+            body.large_blocks,
+        ).await;
+
+        match result {
+            Ok(bytes_written) => {
+                task_manager.complete_task(&task_id, serde_json::json!({
+                    "bytes_written": bytes_written,
+                    "snapshot": full_snapshot,
+                    "output_file": body.output_file,
+                }));
+
+                Ok(success_response(TaskResponse {
+                    status: "success".to_string(),
+                    task_id,
+                    message: Some(format!("Snapshot '{}' sent to '{}' ({} bytes)",
+                        full_snapshot, body.output_file, bytes_written)),
+                }))
+            }
+            Err(e) => {
+                task_manager.fail_task(&task_id, e.clone());
+                Ok(error_response(&e))
+            }
+        }
+    } else {
+        Ok(error_response("Invalid snapshot path"))
+    }
+}
+
+/// Receive snapshot from file
+/// POST /v1/datasets/{path}/receive
+pub async fn receive_snapshot_handler(
+    target_dataset: String,
+    body: ReceiveSnapshotRequest,
+    zfs: ZfsManager,
+    task_manager: TaskManager,
+) -> Result<impl Reply, Rejection> {
+    // Dry run validation only
+    if body.dry_run {
+        // Validate file exists
+        if !std::path::Path::new(&body.input_file).exists() {
+            return Ok(error_response(&format!("Input file '{}' does not exist", body.input_file)));
+        }
+        return Ok(success_response(ActionResponse {
+            status: "success".to_string(),
+            message: format!("Dry run: would receive from '{}' to '{}'", body.input_file, target_dataset),
+        }));
+    }
+
+    // Check pool busy state
+    let pool = ZfsManager::get_pool_from_path(&target_dataset);
+    if let Some(busy_task) = task_manager.is_pool_busy(&pool) {
+        return Ok(error_response(&format!("Pool '{}' is busy with task '{}'", pool, busy_task)));
+    }
+
+    // Create task
+    let task_id = match task_manager.create_task(
+        crate::models::TaskOperation::Receive,
+        vec![pool.clone()],
+    ) {
+        Ok(id) => id,
+        Err((pool, task)) => {
+            return Ok(error_response(&format!("Pool '{}' is busy with task '{}'", pool, task)));
+        }
+    };
+
+    // Mark task running
+    task_manager.mark_running(&task_id);
+
+    // Execute receive operation
+    let result = zfs.receive_snapshot_from_file(
+        &target_dataset,
+        &body.input_file,
+        body.force,
+    ).await;
+
+    match result {
+        Ok(output) => {
+            task_manager.complete_task(&task_id, serde_json::json!({
+                "target_dataset": target_dataset,
+                "input_file": body.input_file,
+                "output": output,
+            }));
+
+            Ok(success_response(TaskResponse {
+                status: "success".to_string(),
+                task_id,
+                message: Some(format!("Received to dataset '{}' from '{}'", target_dataset, body.input_file)),
+            }))
+        }
+        Err(e) => {
+            task_manager.fail_task(&task_id, e.clone());
+            Ok(error_response(&e))
+        }
+    }
+}
+
+/// Replicate snapshot directly to another pool (pipe send→receive)
+/// POST /v1/snapshots/{dataset}/{snapshot}/replicate
+///
+/// IMPORTANT: Both source AND target pools are marked busy during replication
+pub async fn replicate_snapshot_handler(
+    snapshot_path: String,  // dataset/snapshot_name
+    body: ReplicateSnapshotRequest,
+    zfs: ZfsManager,
+    task_manager: TaskManager,
+) -> Result<impl Reply, Rejection> {
+    // Parse snapshot path
+    if let Some(pos) = snapshot_path.rfind('/') {
+        let dataset = &snapshot_path[..pos];
+        let snapshot_name = &snapshot_path[pos+1..];
+        let full_snapshot = format!("{}@{}", dataset, snapshot_name);
+
+        // Get pools for both source and target (BOTH must be free)
+        let source_pool = ZfsManager::get_pool_from_path(&full_snapshot);
+        let target_pool = ZfsManager::get_pool_from_path(&body.target_dataset);
+
+        // Check source pool busy state
+        if let Some(busy_task) = task_manager.is_pool_busy(&source_pool) {
+            return Ok(error_response(&format!(
+                "Source pool '{}' is busy with task '{}'", source_pool, busy_task
+            )));
+        }
+
+        // Check target pool busy state (if different from source)
+        if source_pool != target_pool {
+            if let Some(busy_task) = task_manager.is_pool_busy(&target_pool) {
+                return Ok(error_response(&format!(
+                    "Target pool '{}' is busy with task '{}'", target_pool, busy_task
+                )));
+            }
+        }
+
+        // Dry run returns estimated size
+        if body.dry_run {
+            let mut args = vec!["send", "-n", "-P"];
+            if body.raw { args.push("-w"); }
+            if body.recursive { args.push("-R"); }
+            args.push(&full_snapshot);
+
+            let output = Command::new("zfs").args(&args).output();
+            match output {
+                Ok(out) if out.status.success() => {
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    let mut bytes: u64 = 0;
+                    for line in stdout.lines() {
+                        if line.starts_with("size") {
+                            if let Some(s) = line.split_whitespace().nth(1) {
+                                bytes = s.parse().unwrap_or(0);
+                            }
+                        }
+                    }
+                    return Ok(success_response(SendSizeResponse {
+                        status: "success".to_string(),
+                        snapshot: full_snapshot,
+                        estimated_bytes: bytes,
+                        estimated_human: format_bytes(bytes),
+                        incremental: body.from_snapshot.is_some(),
+                        from_snapshot: body.from_snapshot,
+                    }));
+                }
+                Ok(out) => {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    return Ok(error_response(&format!("Dry run failed: {}", stderr.trim())));
+                }
+                Err(e) => {
+                    return Ok(error_response(&format!("Failed to estimate: {}", e)));
+                }
+            }
+        }
+
+        // Mark BOTH pools as busy (critical for replication)
+        let pools = if source_pool != target_pool {
+            vec![source_pool.clone(), target_pool.clone()]
+        } else {
+            vec![source_pool.clone()]
+        };
+
+        // Create task
+        let task_id = match task_manager.create_task(
+            crate::models::TaskOperation::Replicate,
+            pools,
+        ) {
+            Ok(id) => id,
+            Err((pool, task)) => {
+                return Ok(error_response(&format!("Pool '{}' is busy with task '{}'", pool, task)));
+            }
+        };
+
+        // Mark task running
+        task_manager.mark_running(&task_id);
+
+        // Execute replication
+        let from_snap = body.from_snapshot.as_deref();
+        let result = zfs.replicate_snapshot(
+            &full_snapshot,
+            &body.target_dataset,
+            from_snap,
+            body.recursive,
+            body.properties,
+            body.raw,
+            body.compressed,
+            body.force,
+        ).await;
+
+        match result {
+            Ok(output) => {
+                task_manager.complete_task(&task_id, serde_json::json!({
+                    "source": full_snapshot,
+                    "target": body.target_dataset,
+                    "output": output,
+                }));
+
+                Ok(success_response(TaskResponse {
+                    status: "success".to_string(),
+                    task_id,
+                    message: Some(format!("Replicated '{}' to '{}'", full_snapshot, body.target_dataset)),
+                }))
+            }
+            Err(e) => {
+                task_manager.fail_task(&task_id, e.clone());
+                Ok(error_response(&e))
+            }
+        }
+    } else {
+        Ok(error_response("Invalid snapshot path"))
     }
 }

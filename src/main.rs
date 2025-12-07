@@ -1,6 +1,7 @@
 mod auth;
 mod handlers;
 mod models;
+mod task_manager;
 mod utils;
 mod zfs_management;
 
@@ -8,7 +9,8 @@ use warp::Filter;
 use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
 use zfs_management::ZfsManager;
-use models::{LastAction, CreatePool, CreateSnapshot, CreateDataset, CommandRequest, ExportPoolRequest, ImportPoolRequest, SetPropertyRequest, CloneSnapshotRequest, RollbackRequest};
+use task_manager::TaskManager;
+use models::{LastAction, CreatePool, CreateSnapshot, CreateDataset, CommandRequest, ExportPoolRequest, ImportPoolRequest, SetPropertyRequest, CloneSnapshotRequest, RollbackRequest, SendSizeQuery, SendSnapshotRequest, ReceiveSnapshotRequest, ReplicateSnapshotRequest};
 use handlers::*;
 use auth::*;
 use utils::with_action_tracking;
@@ -28,6 +30,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize action tracking
     let last_action = Arc::new(RwLock::new(None::<LastAction>));
+
+    // Initialize task manager for async replication operations
+    let task_manager = TaskManager::new();
+    let task_mgr = warp::any().map(move || task_manager.clone());
 
     // API key check filter
     let api_key_check = warp::header::headers_cloned()
@@ -390,6 +396,90 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
     };
 
+    // Task routes (for async replication operations)
+    // GET /v1/tasks/{task_id} - Get task status
+    let task_routes = {
+        let get_status = warp::get()
+            .and(warp::path("tasks"))
+            .and(warp::path::param())
+            .and(warp::path::end())
+            .and(task_mgr.clone())
+            .and(api_key_check.clone())
+            .and_then(|task_id: String, tm: TaskManager, _| {
+                get_task_status_handler(task_id, tm)
+            });
+
+        // GET /v1/snapshots/{dataset}/{snapshot}/send-size - Estimate send size
+        let send_size = warp::get()
+            .and(warp::path("snapshots"))
+            .and(warp::path::tail())
+            .and(warp::query::<SendSizeQuery>())
+            .and(zfs.clone())
+            .and(api_key_check.clone())
+            .and_then(|tail: warp::path::Tail, query: SendSizeQuery, zfs: ZfsManager, _| async move {
+                let path = tail.as_str();
+                // Check if path ends with /send-size
+                if let Some(snapshot_path) = path.strip_suffix("/send-size") {
+                    send_size_handler(snapshot_path.to_string(), query, zfs).await
+                } else {
+                    Err(warp::reject::not_found())
+                }
+            });
+
+        // POST /v1/snapshots/{dataset}/{snapshot}/send - Send snapshot to file
+        let send_snapshot = warp::post()
+            .and(warp::path("snapshots"))
+            .and(warp::path::tail())
+            .and(warp::body::json())
+            .and(zfs.clone())
+            .and(task_mgr.clone())
+            .and(api_key_check.clone())
+            .and_then(|tail: warp::path::Tail, body: SendSnapshotRequest, zfs: ZfsManager, tm: TaskManager, _| async move {
+                let path = tail.as_str();
+                // Check if path ends with /send
+                if let Some(snapshot_path) = path.strip_suffix("/send") {
+                    send_snapshot_handler(snapshot_path.to_string(), body, zfs, tm).await
+                } else {
+                    Err(warp::reject::not_found())
+                }
+            });
+
+        // POST /v1/datasets/{path}/receive - Receive snapshot from file
+        let receive_snapshot = warp::post()
+            .and(warp::path("datasets"))
+            .and(warp::path::tail())
+            .and(warp::body::json())
+            .and(zfs.clone())
+            .and(task_mgr.clone())
+            .and(api_key_check.clone())
+            .and_then(|tail: warp::path::Tail, body: ReceiveSnapshotRequest, zfs: ZfsManager, tm: TaskManager, _| async move {
+                let path = tail.as_str();
+                // Check if path ends with /receive
+                if let Some(dataset_path) = path.strip_suffix("/receive") {
+                    receive_snapshot_handler(dataset_path.to_string(), body, zfs, tm).await
+                } else {
+                    Err(warp::reject::not_found())
+                }
+            });
+
+        // POST /v1/snapshots/{dataset}/{snapshot}/replicate - Replicate to another pool
+        // Uses a separate base path to avoid body consumption conflict with /send
+        let replicate_snapshot = warp::post()
+            .and(warp::path("replication"))
+            .and(warp::path::tail())
+            .and(warp::body::json())
+            .and(zfs.clone())
+            .and(task_mgr.clone())
+            .and(api_key_check.clone())
+            .and_then(|tail: warp::path::Tail, body: ReplicateSnapshotRequest, zfs: ZfsManager, tm: TaskManager, _| async move {
+                let path = tail.as_str();
+                // Path format: dataset/snapshot (e.g., "backuppool/222")
+                replicate_snapshot_handler(path.to_string(), body, zfs, tm).await
+            });
+
+        get_status.or(send_size).or(send_snapshot).or(receive_snapshot).or(replicate_snapshot)
+    };
+
     // Combine all API routes under /v1
     let v1_routes = warp::path("v1").and(
         health_routes
@@ -397,6 +487,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .or(openapi_route)
             .or(zfs_features_route)
             .or(pool_routes)
+            .or(task_routes)
             .or(snapshot_routes)
             .or(dataset_routes)
             .or(command_routes)

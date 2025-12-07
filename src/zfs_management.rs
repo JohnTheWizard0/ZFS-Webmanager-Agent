@@ -721,6 +721,252 @@ impl ZfsManager {
             )))
         }
     }
+
+    // =========================================================================
+    // Send/Receive Operations (MF-005 Replication)
+    // CLI-based implementation for reliability with async task system
+    // =========================================================================
+
+    /// Send a snapshot to a file
+    /// Uses `zfs send` CLI for reliability with async execution
+    ///
+    /// # Arguments
+    /// * `snapshot` - Full snapshot path (e.g., "tank/data@snap1")
+    /// * `output_file` - Absolute path to output file
+    /// * `from_snapshot` - Optional incremental base snapshot name
+    /// * `recursive` - Include child datasets (-R)
+    /// * `properties` - Include properties (-p)
+    /// * `raw` - Raw/encrypted send (-w)
+    /// * `compressed` - Compressed stream (-c)
+    /// * `large_blocks` - Allow >128KB blocks (-L)
+    pub async fn send_snapshot_to_file(
+        &self,
+        snapshot: &str,
+        output_file: &str,
+        from_snapshot: Option<&str>,
+        recursive: bool,
+        properties: bool,
+        raw: bool,
+        compressed: bool,
+        large_blocks: bool,
+    ) -> Result<u64, ZfsError> {
+        // Validate snapshot exists
+        if !self.zfs_engine.exists(PathBuf::from(snapshot))
+            .map_err(|e| format!("Failed to check snapshot: {}", e))? {
+            return Err(format!("Snapshot '{}' does not exist", snapshot));
+        }
+
+        // Validate output file path is absolute
+        if !output_file.starts_with('/') {
+            return Err("Output file path must be absolute".to_string());
+        }
+
+        // Build zfs send command
+        let mut args = vec!["send".to_string()];
+
+        // Add flags
+        if recursive {
+            args.push("-R".to_string());
+        }
+        if properties && !recursive {  // -R implies -p
+            args.push("-p".to_string());
+        }
+        if raw {
+            args.push("-w".to_string());
+        }
+        if compressed {
+            args.push("-c".to_string());
+        }
+        if large_blocks {
+            args.push("-L".to_string());
+        }
+
+        // Add incremental source if specified
+        if let Some(from) = from_snapshot {
+            // Parse dataset from snapshot path for incremental
+            let dataset = snapshot.split('@').next()
+                .ok_or("Invalid snapshot path")?;
+            let from_full = if from.contains('@') {
+                from.to_string()
+            } else {
+                format!("{}@{}", dataset, from)
+            };
+            args.push("-i".to_string());
+            args.push(from_full);
+        }
+
+        args.push(snapshot.to_string());
+
+        // Execute: zfs send <args> > output_file
+        // Using shell to redirect output to file
+        let cmd_str = format!("zfs {} > '{}'", args.join(" "), output_file);
+
+        let output = std::process::Command::new("sh")
+            .args(["-c", &cmd_str])
+            .output()
+            .map_err(|e| format!("Failed to execute zfs send: {}", e))?;
+
+        if output.status.success() {
+            // Get file size
+            let metadata = std::fs::metadata(output_file)
+                .map_err(|e| format!("Failed to read output file: {}", e))?;
+            Ok(metadata.len())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(format!("zfs send failed: {}", stderr.trim()))
+        }
+    }
+
+    /// Receive a snapshot from a file
+    /// Uses `zfs receive` CLI for reliability
+    ///
+    /// # Arguments
+    /// * `target_dataset` - Target dataset path (e.g., "tank/restore")
+    /// * `input_file` - Absolute path to input file
+    /// * `force` - Force receive (-F), rollback if necessary
+    pub async fn receive_snapshot_from_file(
+        &self,
+        target_dataset: &str,
+        input_file: &str,
+        force: bool,
+    ) -> Result<String, ZfsError> {
+        // Validate input file exists
+        if !std::path::Path::new(input_file).exists() {
+            return Err(format!("Input file '{}' does not exist", input_file));
+        }
+
+        // Build zfs receive command
+        let mut args = vec!["receive".to_string()];
+
+        if force {
+            args.push("-F".to_string());
+        }
+
+        // Always verbose for output
+        args.push("-v".to_string());
+
+        args.push(target_dataset.to_string());
+
+        // Execute: zfs receive <args> < input_file
+        let cmd_str = format!("zfs {} < '{}'", args.join(" "), input_file);
+
+        let output = std::process::Command::new("sh")
+            .args(["-c", &cmd_str])
+            .output()
+            .map_err(|e| format!("Failed to execute zfs receive: {}", e))?;
+
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            Ok(stdout.trim().to_string())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(format!("zfs receive failed: {}", stderr.trim()))
+        }
+    }
+
+    /// Replicate a snapshot directly to another pool (pipe send→receive)
+    /// Uses `zfs send | zfs receive` for direct pool-to-pool replication
+    ///
+    /// # Arguments
+    /// * `snapshot` - Full snapshot path (e.g., "tank/data@snap1")
+    /// * `target_dataset` - Target dataset path (e.g., "pool2/data")
+    /// * `from_snapshot` - Optional incremental base snapshot name
+    /// * `recursive` - Include child datasets (-R)
+    /// * `properties` - Include properties (-p)
+    /// * `raw` - Raw/encrypted send (-w)
+    /// * `compressed` - Compressed stream (-c)
+    /// * `force` - Force receive (-F), rollback if necessary
+    ///
+    /// # Returns
+    /// * Ok(output) - Verbose output from zfs receive
+    /// * Err - Error message
+    pub async fn replicate_snapshot(
+        &self,
+        snapshot: &str,
+        target_dataset: &str,
+        from_snapshot: Option<&str>,
+        recursive: bool,
+        properties: bool,
+        raw: bool,
+        compressed: bool,
+        force: bool,
+    ) -> Result<String, ZfsError> {
+        // Validate snapshot exists
+        if !self.zfs_engine.exists(PathBuf::from(snapshot))
+            .map_err(|e| format!("Failed to check snapshot: {}", e))? {
+            return Err(format!("Snapshot '{}' does not exist", snapshot));
+        }
+
+        // Build zfs send command arguments
+        let mut send_args = vec!["send"];
+
+        if recursive {
+            send_args.push("-R");
+        }
+        if properties && !recursive {  // -R implies -p
+            send_args.push("-p");
+        }
+        if raw {
+            send_args.push("-w");
+        }
+        if compressed {
+            send_args.push("-c");
+        }
+
+        // Build incremental argument if specified
+        let from_full: String;
+        if let Some(from) = from_snapshot {
+            let dataset = snapshot.split('@').next()
+                .ok_or("Invalid snapshot path")?;
+            from_full = if from.contains('@') {
+                from.to_string()
+            } else {
+                format!("{}@{}", dataset, from)
+            };
+            send_args.push("-i");
+            send_args.push(&from_full);
+        }
+
+        // Build zfs receive command arguments
+        let mut recv_args = vec!["receive", "-v"];
+        if force {
+            recv_args.push("-F");
+        }
+
+        // Build full pipe command
+        let cmd_str = format!(
+            "zfs {} '{}' | zfs {} '{}'",
+            send_args.join(" "),
+            snapshot,
+            recv_args.join(" "),
+            target_dataset
+        );
+
+        let output = std::process::Command::new("sh")
+            .args(["-c", &cmd_str])
+            .output()
+            .map_err(|e| format!("Failed to execute replication: {}", e))?;
+
+        if output.status.success() {
+            // Combine stdout and stderr (zfs receive -v writes to stderr)
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let combined = format!("{}{}", stdout, stderr);
+            Ok(combined.trim().to_string())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(format!("Replication failed: {}", stderr.trim()))
+        }
+    }
+
+    /// Extract pool name from a dataset/snapshot path
+    pub fn get_pool_from_path(path: &str) -> String {
+        path.split('/').next()
+            .unwrap_or(path)
+            .split('@').next()
+            .unwrap_or(path)
+            .to_string()
+    }
 }
 
 /// Result of a successful rollback operation
