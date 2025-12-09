@@ -69,6 +69,12 @@ impl ZfsManager {
     }
 
     pub async fn get_pool_status(&self, name: &str) -> Result<PoolStatus, ZfsError> {
+        // Guard against libzetta panic: check pool exists before calling status()
+        // libzetta's status() has a bug where it panics instead of returning error
+        if !self.zpool_engine.exists(name).map_err(|e| format!("Failed to check pool existence: {}", e))? {
+            return Err(format!("Pool '{}' not found", name));
+        }
+
         // FIXED: Create owned value and avoid temporary borrowing
         let status_options = libzetta::zpool::open3::StatusOptions::default();
         let zpool = self.zpool_engine.status(name, status_options)
@@ -346,6 +352,12 @@ impl ZfsManager {
     /// Bypasses libzetta limitation by accessing pool config nvlist directly.
     /// Extracts scan_stats array per pool_scan_stat_t in sys/fs/zfs.h
     pub async fn get_scrub_status(&self, pool: &str) -> Result<ScrubStatus, ZfsError> {
+        // Guard against libzetta panic: check pool exists before calling status()
+        // libzetta's status() has a bug where it panics instead of returning error
+        if !self.zpool_engine.exists(pool).map_err(|e| format!("Failed to check pool existence: {}", e))? {
+            return Err(format!("Pool '{}' not found", pool));
+        }
+
         // Get pool health via libzetta (still useful for that)
         let status_options = libzetta::zpool::open3::StatusOptions::default();
         let zpool_status = self.zpool_engine.status(pool, status_options)

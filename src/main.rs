@@ -205,9 +205,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 import_pool_handler(body, zfs)
             });
 
-        list.or(status).or(create).or(destroy)
+        // IMPORTANT: Route order matters for warp path matching!
+        // - list_importable (GET /pools/importable) MUST come BEFORE status (GET /pools/{param})
+        // - import_pool (POST /pools/import) MUST come BEFORE create (POST /pools + body)
+        list.or(list_importable).or(status).or(import_pool).or(create).or(destroy)
             .or(scrub_start).or(scrub_pause).or(scrub_stop).or(scrub_status)
-            .or(export_pool).or(list_importable).or(import_pool)
+            .or(export_pool)
     };
 
     // Snapshot routes
@@ -224,22 +227,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and(api_key_check.clone())
             .and_then(|tail: warp::path::Tail, zfs: ZfsManager, _| list_snapshots_handler(tail.as_str().to_string(), zfs));
 
-        // Create must come before clone to avoid body consumption issues
-        // Reject if path ends with /clone (that's the clone route)
+        // Create snapshot route - check path BEFORE consuming body
+        // to avoid body consumption issues with other routes
         let create = warp::post()
             .and(warp::path("snapshots"))
             .and(warp::path::tail())
+            .and_then(|tail: warp::path::Tail| async move {
+                let path = tail.as_str();
+                // Reject paths that belong to other routes BEFORE consuming body
+                if path.ends_with("/clone") || path.ends_with("/send") || path.ends_with("/replicate") || path.ends_with("/send-size") {
+                    Err(warp::reject::not_found())
+                } else {
+                    Ok(tail)
+                }
+            })
             .and(warp::body::json())
             .and(with_action_tracking("create_snapshot", last_action.clone()))
             .and(zfs.clone())
             .and(api_key_check.clone())
             .and_then(|tail: warp::path::Tail, body: CreateSnapshot, zfs: ZfsManager, _| async move {
-                let path = tail.as_str();
-                // Reject if this is actually a clone request
-                if path.ends_with("/clone") {
-                    return Err(warp::reject::not_found());
-                }
-                create_snapshot_handler(path.to_string(), body, zfs).await
+                create_snapshot_handler(tail.as_str().to_string(), body, zfs).await
             });
 
         let delete = warp::delete()
@@ -254,25 +261,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Clone route: POST /snapshots/{dataset}/{snapshot}/clone
         // Creates a writable clone from a snapshot (MF-003 Phase 3)
+        // IMPORTANT: Check path suffix BEFORE consuming body
         let clone = warp::post()
             .and(warp::path("snapshots"))
             .and(warp::path::tail())
+            .and_then(|tail: warp::path::Tail| async move {
+                if tail.as_str().ends_with("/clone") {
+                    Ok(tail)
+                } else {
+                    Err(warp::reject::not_found())
+                }
+            })
             .and(warp::body::json())
             .and(with_action_tracking("clone_snapshot", last_action.clone()))
             .and(zfs.clone())
             .and(api_key_check.clone())
             .and_then(|tail: warp::path::Tail, body: CloneSnapshotRequest, zfs: ZfsManager, _| async move {
                 let path = tail.as_str();
-                // Check if path ends with /clone
-                if let Some(snapshot_path) = path.strip_suffix("/clone") {
-                    clone_snapshot_handler(snapshot_path.to_string(), body, zfs).await
-                } else {
-                    Err(warp::reject::not_found())
-                }
+                let snapshot_path = path.strip_suffix("/clone").unwrap();
+                clone_snapshot_handler(snapshot_path.to_string(), body, zfs).await
             });
 
-        // IMPORTANT: create must come before clone to avoid body consumption issues
-        list.or(create).or(clone).or(delete)
+        // IMPORTANT: Route order for warp body consumption
+        // clone checks for /clone suffix - if not matched, falls through
+        // create handles all other POST /snapshots paths
+        list.or(clone).or(create).or(delete)
     };
 
     // Dataset routes
@@ -307,21 +320,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // PUT /datasets/{name}/properties - set a dataset property
         // **EXPERIMENTAL**: Uses CLI as FFI lacks property setting
+        // IMPORTANT: Check path suffix BEFORE consuming body to avoid body consumption conflicts
         let set_property = warp::put()
             .and(warp::path("datasets"))
             .and(warp::path::tail())
+            .and_then(|tail: warp::path::Tail| async move {
+                if tail.as_str().ends_with("/properties") {
+                    Ok(tail)
+                } else {
+                    Err(warp::reject::not_found())
+                }
+            })
             .and(warp::body::json())
             .and(with_action_tracking("set_dataset_property", last_action.clone()))
             .and(zfs.clone())
             .and(api_key_check.clone())
             .and_then(|tail: warp::path::Tail, body: SetPropertyRequest, zfs: ZfsManager, _: ()| async move {
                 let path = tail.as_str();
-                // Check if path ends with /properties
-                if let Some(dataset) = path.strip_suffix("/properties") {
-                    set_dataset_property_handler(dataset.to_string(), body, zfs).await
-                } else {
-                    Err(warp::reject::not_found())
-                }
+                let dataset = path.strip_suffix("/properties").unwrap();
+                set_dataset_property_handler(dataset.to_string(), body, zfs).await
             });
 
         // POST /datasets/{path}/promote - promote a clone to independent dataset
@@ -345,21 +362,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // POST /datasets/{path}/rollback - rollback dataset to a snapshot
         // FROM-SCRATCH implementation using lzc_rollback_to() FFI (MF-003 Phase 3)
         // Safety levels: default (most recent only), force_destroy_newer, force_destroy_clones
+        // IMPORTANT: Check path suffix BEFORE consuming body to avoid body consumption conflicts
         let rollback = warp::post()
             .and(warp::path("datasets"))
             .and(warp::path::tail())
+            .and_then(|tail: warp::path::Tail| async move {
+                if tail.as_str().ends_with("/rollback") {
+                    Ok(tail)
+                } else {
+                    Err(warp::reject::not_found())
+                }
+            })
             .and(warp::body::json())
             .and(with_action_tracking("rollback_dataset", last_action.clone()))
             .and(zfs.clone())
             .and(api_key_check.clone())
             .and_then(|tail: warp::path::Tail, body: RollbackRequest, zfs: ZfsManager, _: ()| async move {
                 let path = tail.as_str();
-                // Check if path ends with /rollback
-                if let Some(dataset_path) = path.strip_suffix("/rollback") {
-                    rollback_dataset_handler(dataset_path.to_string(), body, zfs).await
-                } else {
-                    Err(warp::reject::not_found())
-                }
+                let dataset_path = path.strip_suffix("/rollback").unwrap();
+                rollback_dataset_handler(dataset_path.to_string(), body, zfs).await
             });
 
         let delete = warp::delete()
@@ -428,39 +449,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
 
         // POST /v1/snapshots/{dataset}/{snapshot}/send - Send snapshot to file
+        // IMPORTANT: Check path suffix BEFORE consuming body to avoid body consumption issues
         let send_snapshot = warp::post()
             .and(warp::path("snapshots"))
             .and(warp::path::tail())
+            .and_then(|tail: warp::path::Tail| async move {
+                // Check path BEFORE consuming body
+                if tail.as_str().ends_with("/send") {
+                    Ok(tail)
+                } else {
+                    Err(warp::reject::not_found())
+                }
+            })
             .and(warp::body::json())
             .and(zfs.clone())
             .and(task_mgr.clone())
             .and(api_key_check.clone())
             .and_then(|tail: warp::path::Tail, body: SendSnapshotRequest, zfs: ZfsManager, tm: TaskManager, _| async move {
                 let path = tail.as_str();
-                // Check if path ends with /send
-                if let Some(snapshot_path) = path.strip_suffix("/send") {
-                    send_snapshot_handler(snapshot_path.to_string(), body, zfs, tm).await
-                } else {
-                    Err(warp::reject::not_found())
-                }
+                let snapshot_path = path.strip_suffix("/send").unwrap(); // Safe: checked above
+                send_snapshot_handler(snapshot_path.to_string(), body, zfs, tm).await
             });
 
         // POST /v1/datasets/{path}/receive - Receive snapshot from file
+        // IMPORTANT: Check path suffix BEFORE consuming body
         let receive_snapshot = warp::post()
             .and(warp::path("datasets"))
             .and(warp::path::tail())
+            .and_then(|tail: warp::path::Tail| async move {
+                if tail.as_str().ends_with("/receive") {
+                    Ok(tail)
+                } else {
+                    Err(warp::reject::not_found())
+                }
+            })
             .and(warp::body::json())
             .and(zfs.clone())
             .and(task_mgr.clone())
             .and(api_key_check.clone())
             .and_then(|tail: warp::path::Tail, body: ReceiveSnapshotRequest, zfs: ZfsManager, tm: TaskManager, _| async move {
                 let path = tail.as_str();
-                // Check if path ends with /receive
-                if let Some(dataset_path) = path.strip_suffix("/receive") {
-                    receive_snapshot_handler(dataset_path.to_string(), body, zfs, tm).await
-                } else {
-                    Err(warp::reject::not_found())
-                }
+                let dataset_path = path.strip_suffix("/receive").unwrap();
+                receive_snapshot_handler(dataset_path.to_string(), body, zfs, tm).await
             });
 
         // POST /v1/snapshots/{dataset}/{snapshot}/replicate - Replicate to another pool
@@ -488,6 +518,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Order:
     // 1. dataset_routes (POST /datasets with path::end()) before task_routes (POST /datasets/{path}/receive)
     // 2. snapshot_routes (POST /snapshots/{tail}) before task_routes (POST /snapshots/{tail}/send)
+    // IMPORTANT: Route order for warp body consumption!
+    // task_routes has specific paths like /snapshots/{path}/send and /snapshots/{path}/clone
+    // These MUST come BEFORE snapshot_routes which has generic /snapshots/{path}
+    // Otherwise the generic route consumes the body before specific routes can match.
     let v1_routes = warp::path("v1").and(
         health_routes
             .or(docs_route)
@@ -495,8 +529,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .or(zfs_features_route)
             .or(pool_routes)
             .or(dataset_routes)
-            .or(snapshot_routes)
-            .or(task_routes)
+            .or(task_routes)       // BEFORE snapshot_routes (has /send, /replicate)
+            .or(snapshot_routes)   // Generic POST /snapshots/{path} last
             .or(command_routes)
     );
 
