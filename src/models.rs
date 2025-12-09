@@ -127,7 +127,8 @@ pub struct ExportPoolRequest {
 #[derive(Debug, Deserialize)]
 pub struct ImportPoolRequest {
     pub name: String,
-    pub dir: Option<String>,  // Optional: directory to search for pool
+    pub dir: Option<String>,      // Optional: directory to search for pool
+    pub new_name: Option<String>, // Optional: rename pool on import (CLI-based)
 }
 
 // Import/Export response structures
@@ -761,6 +762,13 @@ pub struct ReplicateSnapshotRequest {
     pub force: bool,
     #[serde(default)]
     pub dry_run: bool,
+}
+
+/// Query params for dataset deletion
+#[derive(Debug, Deserialize)]
+pub struct DeleteDatasetQuery {
+    #[serde(default)]
+    pub recursive: bool,  // -r flag for recursive delete (children + snapshots)
 }
 
 /// Query params for send size estimation

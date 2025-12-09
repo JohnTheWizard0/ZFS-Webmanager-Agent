@@ -10,7 +10,7 @@ use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
 use zfs_management::ZfsManager;
 use task_manager::TaskManager;
-use models::{LastAction, CreatePool, CreateSnapshot, CreateDataset, CommandRequest, ExportPoolRequest, ImportPoolRequest, SetPropertyRequest, CloneSnapshotRequest, RollbackRequest, SendSizeQuery, SendSnapshotRequest, ReceiveSnapshotRequest, ReplicateSnapshotRequest};
+use models::{LastAction, CreatePool, CreateSnapshot, CreateDataset, CommandRequest, ExportPoolRequest, ImportPoolRequest, SetPropertyRequest, CloneSnapshotRequest, RollbackRequest, SendSizeQuery, SendSnapshotRequest, ReceiveSnapshotRequest, ReplicateSnapshotRequest, DeleteDatasetQuery};
 use handlers::*;
 use auth::*;
 use utils::with_action_tracking;
@@ -386,10 +386,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let delete = warp::delete()
             .and(warp::path("datasets"))
             .and(warp::path::tail())
+            .and(warp::query::<DeleteDatasetQuery>())
             .and(with_action_tracking("delete_dataset", last_action.clone()))
             .and(zfs.clone())
             .and(api_key_check.clone())
-            .and_then(|tail: warp::path::Tail, zfs: ZfsManager, _: ()| delete_dataset_handler(tail.as_str().to_string(), zfs));
+            .and_then(|tail: warp::path::Tail, query: DeleteDatasetQuery, zfs: ZfsManager, _: ()| {
+                delete_dataset_handler(tail.as_str().to_string(), query.recursive, zfs)
+            });
 
         let create = warp::post()
             .and(warp::path("datasets"))

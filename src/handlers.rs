@@ -534,12 +534,25 @@ pub async fn create_dataset_handler(body: CreateDataset, zfs: ZfsManager) -> Res
     }
 }
 
-pub async fn delete_dataset_handler(name: String, zfs: ZfsManager) -> Result<impl Reply, Rejection> {
-    match zfs.delete_dataset(&name).await {
-        Ok(_) => Ok(success_response(ActionResponse {
-            status: "success".to_string(),
-            message: format!("Dataset '{}' deleted successfully", name),
-        })),
+pub async fn delete_dataset_handler(name: String, recursive: bool, zfs: ZfsManager) -> Result<impl Reply, Rejection> {
+    let result = if recursive {
+        zfs.delete_dataset_recursive(&name).await
+    } else {
+        zfs.delete_dataset(&name).await
+    };
+
+    match result {
+        Ok(_) => {
+            let msg = if recursive {
+                format!("Dataset '{}' and all children deleted successfully", name)
+            } else {
+                format!("Dataset '{}' deleted successfully", name)
+            };
+            Ok(success_response(ActionResponse {
+                status: "success".to_string(),
+                message: msg,
+            }))
+        },
         Err(e) => Ok(error_response(&format!("Failed to delete dataset: {}", e))),
     }
 }
@@ -692,19 +705,33 @@ pub async fn list_importable_pools_handler(
 }
 
 /// Import a pool into the system
+/// Supports renaming on import via new_name field
 pub async fn import_pool_handler(
     body: ImportPoolRequest,
     zfs: ZfsManager,
 ) -> Result<impl Reply, Rejection> {
-    let result = match body.dir {
-        Some(ref d) => zfs.import_pool_from_dir(&body.name, d).await,
-        None => zfs.import_pool(&body.name).await,
+    // If new_name is provided, use import_with_name (CLI-based rename)
+    let result = match (&body.new_name, &body.dir) {
+        (Some(new_name), Some(dir)) => {
+            zfs.import_pool_with_name(&body.name, new_name, Some(dir.as_str())).await
+        },
+        (Some(new_name), None) => {
+            zfs.import_pool_with_name(&body.name, new_name, None).await
+        },
+        (None, Some(dir)) => {
+            zfs.import_pool_from_dir(&body.name, dir).await
+        },
+        (None, None) => {
+            zfs.import_pool(&body.name).await
+        },
     };
+
+    let imported_name = body.new_name.as_ref().unwrap_or(&body.name);
 
     match result {
         Ok(_) => Ok(success_response(ActionResponse {
             status: "success".to_string(),
-            message: format!("Pool '{}' imported successfully", body.name),
+            message: format!("Pool '{}' imported successfully", imported_name),
         })),
         Err(e) => Ok(error_response(&format!("Failed to import pool: {}", e))),
     }

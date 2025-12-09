@@ -10,9 +10,9 @@ use std::ptr;
 // libzetta doesn't expose scan progress, so we use libzfs FFI bindings directly
 use libzfs::Libzfs;
 
-// libzetta-zfs-core-sys for clone/promote/rollback/send_space FFI (not exposed by libzetta)
+// libzetta-zfs-core-sys for clone/promote/rollback/send_space/destroy FFI (not exposed by libzetta)
 // NOTE: lzc_receive is too low-level (doesn't parse stream headers), so we use CLI `zfs receive`
-use libzetta_zfs_core_sys::{lzc_clone, lzc_promote, lzc_rollback_to, lzc_send_space, lzc_send_flags};
+use libzetta_zfs_core_sys::{lzc_clone, lzc_promote, lzc_rollback_to, lzc_send_space, lzc_send_flags, lzc_destroy};
 
 // For libzetta send
 use libzetta::zfs::SendFlags;
@@ -200,6 +200,34 @@ impl ZfsManager {
         Ok(())
     }
 
+    /// Import a pool with a new name (rename on import)
+    /// CLI-based: `zpool import old_name new_name`
+    /// Note: libzetta doesn't expose rename on import, so we use CLI directly
+    pub async fn import_pool_with_name(&self, name: &str, new_name: &str, dir: Option<&str>) -> Result<(), ZfsError> {
+        use std::process::Command;
+
+        let mut cmd = Command::new("zpool");
+        cmd.arg("import");
+
+        // Add directory if specified
+        if let Some(d) = dir {
+            cmd.arg("-d").arg(d);
+        }
+
+        // old_name new_name
+        cmd.arg(name).arg(new_name);
+
+        let output = cmd.output()
+            .map_err(|e| format!("Failed to execute zpool import: {}", e))?;
+
+        if output.status.success() {
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(format!("Failed to import pool '{}' as '{}': {}", name, new_name, stderr.trim()))
+        }
+    }
+
     pub async fn list_datasets(&self, pool: &str) -> Result<Vec<String>, ZfsError> {
         let datasets = self.zfs_engine.list_filesystems(pool)
             .map_err(|e| format!("Failed to list datasets: {}", e))?;
@@ -233,6 +261,77 @@ impl ZfsManager {
     pub async fn delete_dataset(&self, name: &str) -> Result<(), ZfsError> {
         self.zfs_engine.destroy(PathBuf::from(name))
             .map_err(|e| format!("Failed to delete dataset: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Recursively delete a dataset and all its children/snapshots
+    /// FROM-SCRATCH: Uses lzc_destroy() FFI for each dataset
+    ///
+    /// Strategy:
+    /// 1. List all datasets and snapshots under the target
+    /// 2. Sort by depth (deepest first) to ensure children are deleted before parents
+    /// 3. Use lzc_destroy() FFI for each
+    pub async fn delete_dataset_recursive(&self, name: &str) -> Result<(), ZfsError> {
+        // Get the pool name from the dataset path
+        let pool = name.split('/').next()
+            .ok_or_else(|| "Invalid dataset path: no pool".to_string())?;
+
+        // List all datasets under the pool
+        let all_datasets = self.zfs_engine.list(PathBuf::from(pool))
+            .map_err(|e| format!("Failed to list datasets: {}", e))?;
+
+        // Also list all snapshots under the target
+        let all_snapshots = self.zfs_engine.list_snapshots(name)
+            .map_err(|e| format!("Failed to list snapshots: {}", e))?;
+
+        // Collect items to delete: target itself + children + snapshots
+        let target_prefix = format!("{}/", name);
+        let mut to_delete: Vec<String> = Vec::new();
+
+        // Add snapshots first (they must be deleted before datasets)
+        for snap in all_snapshots {
+            to_delete.push(snap.to_string_lossy().to_string());
+        }
+
+        // Add child datasets (filter to those under our target)
+        for (_kind, path) in &all_datasets {
+            let path_str = path.to_string_lossy().to_string();
+            if path_str.starts_with(&target_prefix) {
+                // Also get snapshots for this child
+                if let Ok(child_snaps) = self.zfs_engine.list_snapshots(&path_str) {
+                    for snap in child_snaps {
+                        to_delete.push(snap.to_string_lossy().to_string());
+                    }
+                }
+                to_delete.push(path_str);
+            }
+        }
+
+        // Add the target dataset itself
+        to_delete.push(name.to_string());
+
+        // Sort by depth (number of path components) in descending order
+        // This ensures children/snapshots are deleted before parents
+        to_delete.sort_by(|a, b| {
+            let depth_a = a.matches('/').count() + a.matches('@').count();
+            let depth_b = b.matches('/').count() + b.matches('@').count();
+            depth_b.cmp(&depth_a)  // Descending: deepest first
+        });
+
+        // Delete each item using lzc_destroy FFI
+        for item in to_delete {
+            let c_name = CString::new(item.as_str())
+                .map_err(|_| format!("Invalid path: contains null byte: {}", item))?;
+
+            let result = unsafe { lzc_destroy(c_name.as_ptr()) };
+
+            if result != 0 {
+                // Translate errno
+                let err_msg = Self::errno_to_string(result);
+                return Err(format!("Failed to destroy '{}': {} (errno {})", item, err_msg, result));
+            }
+        }
 
         Ok(())
     }

@@ -10,6 +10,21 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ## [Unreleased]
 
 ### Added
+- `tests/zfs_stress_a_short.sh` — NEW: Dataset/Snapshot/Property stress tests (short)
+- `tests/zfs_stress_a_long.sh` — NEW: Dataset/Snapshot/Property stress tests (long)
+- `tests/zfs_stress_b_short.sh` — NEW: Pool/Replication/Auth stress tests (short)
+- `tests/zfs_stress_b_long.sh` — NEW: Pool/Replication/Auth stress tests (long)
+- `tests/STRESS_TESTS.md` — NEW: Comprehensive stress test documentation
+- `src/zfs_management.rs` — Recursive dataset delete
+  - `delete_dataset_recursive()` — Uses lzc_destroy() FFI per item
+  - Lists children/snapshots, sorts by depth, deletes deepest first
+- `src/zfs_management.rs` — Import with rename
+  - `import_pool_with_name()` — CLI-based rename on import
+- `src/models.rs` — New request types
+  - `DeleteDatasetQuery` — Query param for recursive delete
+  - `ImportPoolRequest.new_name` — Optional rename field
+- `src/main.rs` — Updated routes
+  - `DELETE /v1/datasets/{name}?recursive=true` — Recursive delete support
 - `src/task_manager.rs` — NEW: Async task management (MF-005 Replication)
   - `TaskManager` — Pool busy tracking, task creation, progress updates
   - `TaskState` — Task status with progress and result tracking
