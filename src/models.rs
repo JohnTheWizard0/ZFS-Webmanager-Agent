@@ -338,7 +338,7 @@ impl ZfsFeaturesResponse {
                 implemented: true,
                 implementation: Some(ImplementationMethod::Libzetta),
                 endpoint: Some("POST /v1/pools/import".to_string()),
-                notes: Some("Import by name, optional dir".to_string()),
+                notes: Some("Import by name, optional dir. Rename (new_name) uses CLI".to_string()),
             },
             ZfsFeatureInfo {
                 name: "Export pool".to_string(),
@@ -533,7 +533,7 @@ impl ZfsFeaturesResponse {
                 category: FeatureCategory::Replication,
                 implemented: true,
                 implementation: Some(ImplementationMethod::Hybrid),
-                endpoint: Some("POST /v1/replication/{ds}/{snap}".to_string()),
+                endpoint: Some("POST /v1/snapshots/{ds}/{snap}/replicate".to_string()),
                 notes: Some("libzetta send + CLI receive (lzc_receive too low-level)".to_string()),
             },
             ZfsFeatureInfo {
@@ -800,7 +800,6 @@ pub struct SendSizeResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     // -------------------------------------------------------------------------
