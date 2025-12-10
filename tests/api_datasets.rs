@@ -73,9 +73,7 @@ async fn test_delete_dataset_nested_path() {
 */
 
 #[test]
+#[ignore = "Integration test requires running server + ZFS - use zfs_parcour.sh"]
 fn placeholder_dataset_tests() {
-    // BLOCKED: Crate must compile + ZFS required
-    // Specifically: zfs_management.rs:135 (CreateDataset import)
-    // Specifically: zfs_management.rs:144-146 (dead code)
-    assert!(true, "Dataset integration tests pending crate compilation");
+    // Real dataset integration tests run via tests/zfs_parcour.sh
 }

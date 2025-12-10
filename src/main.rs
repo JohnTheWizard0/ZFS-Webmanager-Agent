@@ -26,11 +26,11 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
         }
     } else if err.is_not_found() {
         (StatusCode::NOT_FOUND, "Endpoint not found")
-    } else if let Some(_) = err.find::<warp::reject::MethodNotAllowed>() {
+    } else if err.find::<warp::reject::MethodNotAllowed>().is_some() {
         (StatusCode::METHOD_NOT_ALLOWED, "Method not allowed")
-    } else if let Some(_) = err.find::<warp::reject::InvalidHeader>() {
+    } else if err.find::<warp::reject::InvalidHeader>().is_some() {
         (StatusCode::BAD_REQUEST, "Invalid header")
-    } else if let Some(_) = err.find::<warp::body::BodyDeserializeError>() {
+    } else if err.find::<warp::body::BodyDeserializeError>().is_some() {
         (StatusCode::BAD_REQUEST, "Invalid request body")
     } else {
         // Log unexpected rejections for debugging

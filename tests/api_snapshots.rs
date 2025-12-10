@@ -67,7 +67,7 @@ async fn test_snapshot_on_nonexistent_dataset() {
 */
 
 #[test]
+#[ignore = "Integration test requires running server + ZFS - use zfs_parcour.sh"]
 fn placeholder_snapshot_tests() {
-    // BLOCKED: Crate must compile + ZFS required
-    assert!(true, "Snapshot integration tests pending crate compilation");
+    // Real snapshot integration tests run via tests/zfs_parcour.sh
 }

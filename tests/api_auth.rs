@@ -54,7 +54,7 @@ async fn test_valid_api_key_proceeds() {
 */
 
 #[test]
+#[ignore = "Integration test requires running server - use zfs_parcour.sh"]
 fn placeholder_auth_tests() {
-    // BLOCKED: Crate must compile before integration tests can run
-    assert!(true, "Auth integration tests pending crate compilation");
+    // Real auth integration tests run via tests/zfs_parcour.sh
 }

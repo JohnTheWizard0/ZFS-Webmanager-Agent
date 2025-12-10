@@ -60,7 +60,6 @@ pub fn with_action_tracking(
             if let Ok(mut action) = last_action.write() {
                 *action = Some(LastAction::new(function_name.to_string()));
             }
-            ()                       // explicit unit return
         })
         .untuple_one()               // ← collapses ((),) to ()
 }
@@ -71,7 +70,6 @@ pub fn with_action_tracking(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde::Deserialize;
 
     /// Test: success_response wraps data in JSON
     /// Expected: Returns warp::reply::Json
@@ -81,9 +79,8 @@ mod tests {
         struct TestData { value: i32 }
 
         let data = TestData { value: 42 };
-        let _response = success_response(data);
-        // If we get here, it compiled and returned a Json reply
-        assert!(true, "success_response returns Json");
+        // Test passes if this compiles and returns without panic
+        let _ = success_response(data);
     }
 
     /// Test: error_response creates error structure

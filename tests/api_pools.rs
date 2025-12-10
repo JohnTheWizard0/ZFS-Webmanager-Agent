@@ -80,7 +80,7 @@ async fn test_destroy_pool_force() {
 */
 
 #[test]
+#[ignore = "Integration test requires running server + ZFS - use zfs_parcour.sh"]
 fn placeholder_pool_tests() {
-    // BLOCKED: Crate must compile + ZFS required
-    assert!(true, "Pool integration tests pending crate compilation");
+    // Real pool integration tests run via tests/zfs_parcour.sh
 }

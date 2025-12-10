@@ -125,6 +125,8 @@ impl TaskManager {
     }
 
     /// Update task progress
+    /// Reserved for MF-005 real-time progress tracking (future feature)
+    #[allow(dead_code)]
     pub fn update_progress(&self, task_id: &str, bytes_processed: u64, bytes_total: Option<u64>) {
         let mut tasks = self.tasks.write().unwrap();
         if let Some(task) = tasks.get_mut(task_id) {
@@ -207,7 +209,9 @@ impl TaskManager {
         });
     }
 
-    /// List all tasks (for debugging)
+    /// List all tasks (for debugging/admin endpoints)
+    /// Reserved for MF-005 task listing endpoint (future feature)
+    #[allow(dead_code)]
     pub fn list_tasks(&self) -> Vec<TaskState> {
         let tasks = self.tasks.read().unwrap();
         tasks.values().cloned().collect()

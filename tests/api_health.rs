@@ -55,8 +55,7 @@ async fn test_health_no_auth_required() {
 
 // Placeholder test so cargo test --tests doesn't complain about empty file
 #[test]
+#[ignore = "Integration test requires running server - use zfs_parcour.sh"]
 fn placeholder_health_tests() {
-    // BLOCKED: Crate must compile before integration tests can run
-    // See: zfs_management.rs lines 135, 144-146
-    assert!(true, "Health integration tests pending crate compilation");
+    // Real health integration tests run via tests/zfs_parcour.sh
 }

@@ -479,7 +479,7 @@ impl ZfsManager {
 
         match scan_stats {
             Ok(stats) if !stats.is_empty() => {
-                let pss_func = stats.get(0).copied();
+                let pss_func = stats.first().copied();
                 let pss_state = stats.get(1).copied();
                 let pss_start_time = stats.get(2).copied();
                 let pss_end_time = stats.get(3).copied();
@@ -698,7 +698,7 @@ impl ZfsManager {
 
         // Get all snapshots for this dataset
         let all_snapshots = self.list_snapshots(dataset).await
-            .map_err(|e| RollbackError::ZfsError(e))?;
+            .map_err(RollbackError::ZfsError)?;
 
         // Find target snapshot index and get newer snapshots
         // Note: list_snapshots returns full paths like "tank/data@snap1"
@@ -849,6 +849,9 @@ impl ZfsManager {
     /// * `compressed` - Compressed stream (-c)
     /// * `large_blocks` - Allow >128KB blocks (-L)
     /// * `overwrite` - If true, overwrite existing file; if false, fail if file exists
+    // Allow: Parameters map 1:1 to ZFS CLI flags; an options struct would add indirection
+    // without semantic benefit for this internal API.
+    #[allow(clippy::too_many_arguments)]
     pub async fn send_snapshot_to_file(
         &self,
         snapshot: &str,
@@ -1016,6 +1019,9 @@ impl ZfsManager {
     /// # Returns
     /// * Ok(output) - Success message
     /// * Err - Error message
+    // Allow: Parameters map 1:1 to ZFS CLI flags; an options struct would add indirection
+    // without semantic benefit for this internal API.
+    #[allow(clippy::too_many_arguments)]
     pub async fn replicate_snapshot(
         &self,
         snapshot: &str,
@@ -1165,14 +1171,14 @@ impl ZfsManager {
         let c_snapshot = CString::new(snapshot)
             .map_err(|_| "Invalid snapshot path: contains null byte")?;
 
-        let c_from: Option<CString> = from_snapshot.map(|f| {
+        let c_from: Option<CString> = from_snapshot.and_then(|f| {
             if f.contains('@') {
                 CString::new(f).ok()
             } else {
                 let dataset = snapshot.split('@').next().unwrap_or(snapshot);
                 CString::new(format!("{}@{}", dataset, f)).ok()
             }
-        }).flatten();
+        });
 
         // Build flags
         let mut flags: lzc_send_flags::Type = 0;
