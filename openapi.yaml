@@ -5,7 +5,7 @@ info:
     RESTful API for managing ZFS pools, datasets, and snapshots.
 
     ## Authentication
-    All endpoints (except `/v1/health` and `/v1/docs`) require an API key passed via the `X-API-Key` header.
+    All endpoints (except `/v1/health`, `/v1/docs`, `/v1/features`) require an API key passed via the `X-API-Key` header.
     The API key is generated on first run and stored in `~/.zfs_webmanager/api_key`.
 
     ## Error Handling
@@ -13,7 +13,16 @@ info:
     ```json
     {"status": "error", "message": "Description of the error"}
     ```
-  version: 0.3.3
+
+    ## Implementation Methods
+    Different features use different implementation approaches:
+    - **libzetta**: High-level Rust ZFS bindings
+    - **FFI**: Direct `lzc_*` function calls (FROM-SCRATCH implementations)
+    - **CLI-BASED**: Falls back to `zfs`/`zpool` commands (marked as experimental)
+    - **HYBRID**: Combination (e.g., libzetta send + CLI receive)
+
+    Features using CLI are clearly marked in their descriptions.
+  version: 0.5.6
   contact:
     name: ZFS Agent
   license:
@@ -270,6 +279,13 @@ components:
           nullable: true
           description: Directory to search for pool (optional)
           example: /dev/disk/by-id
+        new_name:
+          type: string
+          nullable: true
+          description: |
+            **CLI-BASED**: Rename pool during import. Uses `zpool import old_name new_name`.
+            libzetta doesn't expose rename on import, so this falls back to CLI.
+          example: tank_restored
       required:
         - name
 
@@ -715,6 +731,244 @@ components:
         - version
         - summary
         - features
+
+    # Task management types (Replication system)
+    TaskOperation:
+      type: string
+      enum: [send, receive, replicate]
+      description: Type of async operation
+
+    TaskStatus:
+      type: string
+      enum: [pending, running, completed, failed]
+      description: Current state of the task
+
+    TaskProgress:
+      type: object
+      description: Progress information for running tasks
+      properties:
+        bytes_processed:
+          type: integer
+          format: int64
+          description: Bytes processed so far
+          example: 536870912
+        bytes_total:
+          type: integer
+          format: int64
+          nullable: true
+          description: Total bytes (if known)
+          example: 1073741824
+        percent:
+          type: number
+          format: float
+          nullable: true
+          description: Completion percentage (0-100)
+          example: 50.0
+
+    TaskResponse:
+      type: object
+      description: Response when a task is created
+      properties:
+        status:
+          type: string
+          example: success
+        task_id:
+          type: string
+          description: Unique task identifier
+          example: "task_1733536800_abc123"
+        message:
+          type: string
+          nullable: true
+          description: Human-readable message
+          example: "Snapshot 'tank/data@snap1' sent to '/backup/snap1.zfs'"
+      required:
+        - status
+        - task_id
+
+    TaskStatusResponse:
+      type: object
+      description: Full task status response
+      properties:
+        status:
+          type: string
+          enum: [pending, running, completed, failed]
+          description: Task state
+          example: running
+        task_id:
+          type: string
+          example: "task_1733536800_abc123"
+        operation:
+          $ref: '#/components/schemas/TaskOperation'
+        started_at:
+          type: integer
+          format: int64
+          description: Unix timestamp when task started
+          example: 1733536800
+        completed_at:
+          type: integer
+          format: int64
+          nullable: true
+          description: Unix timestamp when task completed
+        progress:
+          $ref: '#/components/schemas/TaskProgress'
+          nullable: true
+        result:
+          type: object
+          nullable: true
+          description: Task result data (on completion)
+        error:
+          type: string
+          nullable: true
+          description: Error message (on failure)
+      required:
+        - status
+        - task_id
+        - operation
+        - started_at
+
+    # Send/Receive/Replicate types (Replication system)
+    SendSnapshotRequest:
+      type: object
+      description: Request to send a snapshot to a file
+      properties:
+        output_file:
+          type: string
+          description: Absolute path to output file
+          example: /backup/tank_data_snap1.zfs
+        from_snapshot:
+          type: string
+          nullable: true
+          description: Base snapshot for incremental send (snapshot name or full path)
+          example: snap0
+        recursive:
+          type: boolean
+          default: false
+          description: Include child datasets (NOT SUPPORTED by libzetta - will error)
+        properties:
+          type: boolean
+          default: false
+          description: Include dataset properties (NOT SUPPORTED by libzetta)
+        raw:
+          type: boolean
+          default: false
+          description: Raw/encrypted send (-w flag)
+        compressed:
+          type: boolean
+          default: false
+          description: Compressed stream (-c flag)
+        large_blocks:
+          type: boolean
+          default: false
+          description: Allow >128KB blocks (-L flag)
+        dry_run:
+          type: boolean
+          default: false
+          description: Only estimate size, don't actually send
+        overwrite:
+          type: boolean
+          default: false
+          description: Overwrite output file if it exists
+      required:
+        - output_file
+
+    ReceiveSnapshotRequest:
+      type: object
+      description: |
+        **CLI-BASED**: Request to receive a snapshot from a file.
+        Uses `zfs receive` command because lzc_receive() is too low-level
+        (doesn't parse stream headers properly).
+      properties:
+        input_file:
+          type: string
+          description: Absolute path to input file
+          example: /backup/tank_data_snap1.zfs
+        force:
+          type: boolean
+          default: false
+          description: Force receive (-F), rollback target if necessary
+        dry_run:
+          type: boolean
+          default: false
+          description: Validate only, don't actually receive
+      required:
+        - input_file
+
+    ReplicateSnapshotRequest:
+      type: object
+      description: |
+        **HYBRID**: Request to replicate a snapshot directly to another pool.
+        Uses libzetta for send + CLI `zfs receive` (lzc_receive too low-level).
+      properties:
+        target_dataset:
+          type: string
+          description: Target dataset path on destination pool
+          example: backup/replicated
+        from_snapshot:
+          type: string
+          nullable: true
+          description: Base snapshot for incremental replication
+          example: snap0
+        recursive:
+          type: boolean
+          default: false
+          description: Include child datasets (NOT SUPPORTED - will error)
+        properties:
+          type: boolean
+          default: false
+          description: Include dataset properties (NOT SUPPORTED)
+        raw:
+          type: boolean
+          default: false
+          description: Raw/encrypted send (-w flag)
+        compressed:
+          type: boolean
+          default: false
+          description: Compressed stream (-c flag)
+        force:
+          type: boolean
+          default: false
+          description: Force receive, rollback target if necessary
+        dry_run:
+          type: boolean
+          default: false
+          description: Only estimate size, don't actually replicate
+      required:
+        - target_dataset
+
+    SendSizeResponse:
+      type: object
+      description: Response for send size estimation
+      properties:
+        status:
+          type: string
+          example: success
+        snapshot:
+          type: string
+          description: Full snapshot path
+          example: tank/data@snap1
+        estimated_bytes:
+          type: integer
+          format: int64
+          description: Estimated stream size in bytes
+          example: 1073741824
+        estimated_human:
+          type: string
+          description: Human-readable size
+          example: "1.00 GiB"
+        incremental:
+          type: boolean
+          description: Whether this is an incremental estimate
+          example: false
+        from_snapshot:
+          type: string
+          nullable: true
+          description: Base snapshot (if incremental)
+      required:
+        - status
+        - snapshot
+        - estimated_bytes
+        - estimated_human
+        - incremental
 
     # Command types
     CommandRequest:
@@ -1469,6 +1723,265 @@ paths:
               schema:
                 $ref: '#/components/schemas/CommandResponse'
 
+  # Task management (Replication system)
+  /tasks/{task_id}:
+    get:
+      summary: Get task status
+      description: |
+        Get the status of an async task (send, receive, replicate).
+
+        Tasks are created when starting long-running operations and can be
+        polled for progress. Tasks expire after 1 hour.
+
+        Pools involved in a task are marked as busy and cannot start
+        new operations until the task completes.
+      operationId: getTaskStatus
+      tags:
+        - Tasks
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Task identifier returned from send/receive/replicate
+          example: task_1733536800_abc123
+      responses:
+        '200':
+          description: Task status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskStatusResponse'
+        '404':
+          description: Task not found (may have expired)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # Replication endpoints
+  /snapshots/{dataset}/{snapshot}/send-size:
+    get:
+      summary: Estimate send size
+      description: |
+        Estimate the size of a send stream for a snapshot.
+
+        **Implementation**: FROM-SCRATCH using `lzc_send_space()` FFI.
+
+        This is useful for planning backup storage or estimating transfer times
+        before starting an actual send operation.
+      operationId: getSendSize
+      tags:
+        - Replication
+      parameters:
+        - name: dataset
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Dataset path (e.g., tank/data)
+        - name: snapshot
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Snapshot name (e.g., snap1)
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Base snapshot for incremental size estimation
+        - name: recursive
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Include child datasets (NOT SUPPORTED)
+        - name: raw
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Raw/encrypted estimate
+      responses:
+        '200':
+          description: Size estimate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendSizeResponse'
+        '404':
+          description: Snapshot not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /snapshots/{dataset}/{snapshot}/send:
+    post:
+      summary: Send snapshot to file
+      description: |
+        Send a snapshot to a file for backup or transfer.
+
+        **Implementation**: Uses libzetta `send_full()` / `send_incremental()`.
+
+        This is an async operation - returns a task_id that can be polled via `/tasks/{task_id}`.
+        The pool is marked as busy during the operation.
+
+        **Note**: Recursive send (-R) is NOT SUPPORTED by libzetta and will return an error.
+      operationId: sendSnapshot
+      tags:
+        - Replication
+      parameters:
+        - name: dataset
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Dataset path (e.g., tank/data)
+        - name: snapshot
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Snapshot name (e.g., snap1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendSnapshotRequest'
+      responses:
+        '200':
+          description: |
+            Send started (returns task_id) or dry-run result (returns size estimate)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/TaskResponse'
+                  - $ref: '#/components/schemas/SendSizeResponse'
+        '400':
+          description: Invalid request or pool is busy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Snapshot not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /datasets/{path}/receive:
+    post:
+      summary: Receive snapshot from file
+      description: |
+        Receive a snapshot from a file (restore from backup).
+
+        **CLI-BASED**: Uses `zfs receive` command because `lzc_receive()` FFI is too
+        low-level and doesn't properly parse stream headers.
+
+        This is an async operation - returns a task_id that can be polled via `/tasks/{task_id}`.
+        The target pool is marked as busy during the operation.
+      operationId: receiveSnapshot
+      tags:
+        - Replication
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Target dataset path (e.g., tank/restored)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReceiveSnapshotRequest'
+      responses:
+        '200':
+          description: Receive started (returns task_id) or dry-run validation passed
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/TaskResponse'
+                  - $ref: '#/components/schemas/ActionResponse'
+        '400':
+          description: Invalid request, pool is busy, or input file not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /snapshots/{dataset}/{snapshot}/replicate:
+    post:
+      summary: Replicate snapshot to another pool
+      description: |
+        Replicate a snapshot directly to another pool (pipe send→receive).
+
+        **HYBRID IMPLEMENTATION**: Uses libzetta for send + CLI `zfs receive`.
+        The `lzc_receive()` FFI is too low-level (doesn't parse stream headers),
+        so we pipe libzetta's send to `zfs receive` CLI.
+
+        This is an async operation - returns a task_id that can be polled via `/tasks/{task_id}`.
+
+        **IMPORTANT**: BOTH source AND target pools are marked as busy during replication.
+        This prevents concurrent operations that could corrupt data.
+
+        **Note**: Recursive replication (-R) is NOT SUPPORTED and will return an error.
+      operationId: replicateSnapshot
+      tags:
+        - Replication
+      parameters:
+        - name: dataset
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Source dataset path (e.g., tank/data)
+        - name: snapshot
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Snapshot name (e.g., snap1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReplicateSnapshotRequest'
+      responses:
+        '200':
+          description: |
+            Replication started (returns task_id) or dry-run result (returns size estimate)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/TaskResponse'
+                  - $ref: '#/components/schemas/SendSizeResponse'
+        '400':
+          description: Invalid request, source or target pool is busy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Snapshot not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
 tags:
   - name: Health
     description: Server health and status
@@ -1480,5 +1993,20 @@ tags:
     description: ZFS dataset (filesystem/volume) operations
   - name: Snapshots
     description: ZFS snapshot operations
+  - name: Replication
+    description: |
+      ZFS send/receive and replication operations.
+
+      **Implementation notes**:
+      - Send to file: Uses libzetta `send_full()` / `send_incremental()`
+      - Receive from file: **CLI-BASED** (`zfs receive`) - lzc_receive too low-level
+      - Replicate to pool: **HYBRID** (libzetta send + CLI receive)
+      - Size estimation: FROM-SCRATCH `lzc_send_space()` FFI
+  - name: Tasks
+    description: |
+      Async task management for long-running operations.
+
+      Tasks are created for send, receive, and replicate operations.
+      Poll `/tasks/{task_id}` to check progress. Tasks expire after 1 hour.
   - name: System
     description: System-level operations
