@@ -338,8 +338,16 @@ impl ZfsManager {
     }
 
     pub async fn delete_snapshot(&self, dataset: &str, snapshot_name: &str) -> Result<(), ZfsError> {
-        let snapshot_path = PathBuf::from(format!("{}@{}", dataset, snapshot_name));
+        let full_snapshot_name = format!("{}@{}", dataset, snapshot_name);
 
+        // Verify snapshot exists before attempting deletion
+        // libzetta's destroy_snapshots silently succeeds for non-existent snapshots
+        let existing_snapshots = self.list_snapshots(dataset).await?;
+        if !existing_snapshots.contains(&full_snapshot_name) {
+            return Err(format!("Snapshot '{}' does not exist", full_snapshot_name));
+        }
+
+        let snapshot_path = PathBuf::from(&full_snapshot_name);
         self.zfs_engine.destroy_snapshots(&[snapshot_path], libzetta::zfs::DestroyTiming::RightNow)
             .map_err(|e| format!("Failed to delete snapshot: {}", e))?;
 

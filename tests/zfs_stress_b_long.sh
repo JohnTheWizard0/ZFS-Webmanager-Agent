@@ -199,18 +199,33 @@ test_pool_destroy_nonexistent() {
 }
 
 test_pool_destroy_with_datasets() {
+    # NOTE: This test is run LAST in the suite because it destroys stress_b_pool_alt's disks
+    # and recreates them as a temp pool. The pool metadata is overwritten by zpool create -f.
     log_header "PO6: DESTROY POOL WITH DATASETS"
+
+    # Destroy stress_b_pool_alt to free DISK_3/DISK_4 for temp pool
+    # We use destroy instead of export because we'll recreate it at the end
+    if zpool list "$STRESS_POOL_B" &>/dev/null; then
+        log_test "Destroying $STRESS_POOL_B to free disks"
+        zpool destroy -f "$STRESS_POOL_B" 2>/dev/null || { log_skip "Can't destroy $STRESS_POOL_B"; return; }
+        log_pass
+    fi
+
     # Create temp pool with dataset
     log_test "Setup: pool with dataset (using CLI)"
-    zpool create -f temp_destroy_test "$DISK_3" "$DISK_4" 2>/dev/null || { log_skip "Can't create temp pool"; return; }
+    zpool create -f temp_destroy_test "$DISK_3" "$DISK_4" 2>/dev/null || {
+        log_skip "Can't create temp pool"
+        return
+    }
     zfs create temp_destroy_test/data 2>/dev/null || true
+    log_pass
 
-    log_test "DELETE pool with datasets"
+    log_test "DELETE pool with datasets via API"
     local response
     response=$(api DELETE "/v1/pools/temp_destroy_test")
     # Could succeed (force) or fail (has datasets)
     if is_success "$response"; then
-        log_info "Pool destroyed (force mode)"
+        log_info "Pool destroyed successfully"
         log_pass
     elif is_error "$response"; then
         log_expect_error "$(json_field "$response" "message")"
@@ -218,10 +233,10 @@ test_pool_destroy_with_datasets() {
         zpool destroy -f temp_destroy_test 2>/dev/null || true
     fi
 
-    # Re-create STRESS_POOL_B if we used those disks
-    if ! zpool list "$STRESS_POOL_B" &>/dev/null; then
-        api POST "/v1/pools" "{\"name\": \"$STRESS_POOL_B\", \"raid_type\": \"mirror\", \"disks\": [\"$DISK_3\", \"$DISK_4\"]}" >/dev/null 2>&1 || true
-    fi
+    # Recreate stress_b_pool_alt for cleanup consistency
+    log_test "Recreating $STRESS_POOL_B"
+    response=$(api POST "/v1/pools" "{\"name\": \"$STRESS_POOL_B\", \"raid_type\": \"mirror\", \"disks\": [\"$DISK_3\", \"$DISK_4\"]}")
+    is_success "$response" && log_pass || log_info "Recreate optional - cleanup will handle"
 }
 
 test_pool_destroy_with_snapshots() {
@@ -443,11 +458,17 @@ test_import_with_rename() {
     log_test "Verify old name gone"
     zpool list "$STRESS_POOL_B" &>/dev/null && log_fail "Old exists" || { log_info "Old removed"; log_pass; }
 
-    # Restore
+    # Restore original name
+    # After 'zpool import oldname newname', the pool's on-disk name becomes newname
+    # To restore: export newname, then import newname with new_name=oldname
     log_test "Restore original name"
     response=$(api POST "/v1/pools/$NEW_NAME/export" '{}')
-    is_success "$response" || zpool destroy -f "$NEW_NAME" 2>/dev/null || true
-    response=$(api POST "/v1/pools/import" "{\"name\": \"$STRESS_POOL_B\"}")
+    if ! is_success "$response"; then
+        log_fail "Export failed: $(json_field "$response" "message")"
+        zpool destroy -f "$NEW_NAME" 2>/dev/null || true
+        return
+    fi
+    response=$(api POST "/v1/pools/import" "{\"name\": \"$NEW_NAME\", \"new_name\": \"$STRESS_POOL_B\"}")
     is_success "$response" && { log_info "Restored"; log_pass; } || log_fail "$(json_field "$response" "message")"
 }
 
@@ -778,13 +799,13 @@ main() {
     check_prerequisites
     setup_test_pools
 
-    # Pool PO1-PO10
+    # Pool PO1-PO10 (PO6 runs at end - needs to destroy stress_b_pool_alt)
     test_pool_invalid_disk
     test_pool_disk_in_use
     test_pool_duplicate_name
     test_pool_raid_types
     test_pool_destroy_nonexistent
-    test_pool_destroy_with_datasets
+    # test_pool_destroy_with_datasets runs at the END - see below
     test_pool_destroy_with_snapshots
     test_pool_status_nonexistent
     test_pool_special_chars
@@ -838,6 +859,9 @@ main() {
     test_api_404
     test_api_wrong_method
     test_api_concurrent
+
+    # PO6 runs LAST because it destroys stress_b_pool_alt (needed by earlier tests)
+    test_pool_destroy_with_datasets
 
     log_header "TEST SUMMARY"
     echo -e "Passed:  ${GREEN}$PASSED${NC}"

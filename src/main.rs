@@ -545,6 +545,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         get_status.or(send_size).or(send_snapshot).or(receive_snapshot).or(replicate_snapshot)
     };
 
+    // Catch-all 404 route for non-existent endpoints
+    // Must be last in the route chain - matches any path not handled by other routes
+    // IMPORTANT: Only return 404 for paths that don't match known endpoint prefixes.
+    // This ensures auth rejections from valid endpoints propagate to the rejection handler
+    // and return proper 401 responses instead of being caught here as 404.
+    let not_found_route = warp::path::tail()
+        .and_then(|tail: warp::path::Tail| async move {
+            let path = tail.as_str();
+            // Known endpoint prefixes - if path matches these, reject so auth errors propagate
+            let known_prefixes = [
+                "pools", "datasets", "snapshots", "tasks", "command", "replication",
+                "health", "docs", "openapi.yaml", "features"
+            ];
+
+            // Check if path starts with any known prefix
+            let matches_known = known_prefixes.iter().any(|prefix| {
+                path == *prefix || path.starts_with(&format!("{}/", prefix))
+            });
+
+            if matches_known {
+                // Path matches a known endpoint - let auth rejection propagate
+                Err(warp::reject::not_found())
+            } else {
+                // Truly unknown path - we'll return 404
+                Ok(())
+            }
+        })
+        .map(|_| {
+            warp::reply::with_status(
+                warp::reply::json(&serde_json::json!({
+                    "status": "error",
+                    "message": "Endpoint not found"
+                })),
+                StatusCode::NOT_FOUND,
+            )
+        });
+
     // Combine all API routes under /v1
     // IMPORTANT: Route order matters for warp body consumption!
     // Routes with path::end() + body::json() must come BEFORE routes with path::tail() + body::json()
@@ -566,6 +603,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .or(task_routes)       // BEFORE snapshot_routes (has /send, /replicate)
             .or(snapshot_routes)   // Generic POST /snapshots/{path} last
             .or(command_routes)
+            .or(not_found_route)   // Catch-all 404 for unmatched paths (must be last)
     ).recover(handle_rejection);
 
     // Start server
