@@ -135,6 +135,14 @@ impl ZfsManager {
     }
 
     pub async fn destroy_pool(&self, name: &str, force: bool) -> Result<(), ZfsError> {
+        // Verify pool exists before attempting destroy
+        let pools = self.zpool_engine.available()
+            .map_err(|e| format!("Failed to list pools: {}", e))?;
+
+        if !pools.iter().any(|p| p.name() == name) {
+            return Err(format!("Pool '{}' does not exist", name));
+        }
+
         let mode = if force { DestroyMode::Force } else { DestroyMode::Gentle };
 
         self.zpool_engine.destroy(name, mode)
@@ -269,65 +277,42 @@ impl ZfsManager {
     /// FROM-SCRATCH: Uses lzc_destroy() FFI for each dataset
     ///
     /// Strategy:
-    /// 1. List all datasets and snapshots under the target
-    /// 2. Sort by depth (deepest first) to ensure children are deleted before parents
-    /// 3. Use lzc_destroy() FFI for each
+    /// 1. Use list() which returns all datasets AND snapshots (uses -t all -r)
+    /// 2. Filter to target + children + their snapshots
+    /// 3. Sort by depth (deepest first) to ensure children are deleted before parents
+    /// 4. Use lzc_destroy() FFI for each
     pub async fn delete_dataset_recursive(&self, name: &str) -> Result<(), ZfsError> {
-        // Get the pool name from the dataset path
         let pool = name.split('/').next()
             .ok_or_else(|| "Invalid dataset path: no pool".to_string())?;
 
-        // List all datasets under the pool
-        let all_datasets = self.zfs_engine.list(PathBuf::from(pool))
+        // list() returns ALL datasets and snapshots in pool (uses -t all -r)
+        let all_items = self.zfs_engine.list(PathBuf::from(pool))
             .map_err(|e| format!("Failed to list datasets: {}", e))?;
 
-        // Also list all snapshots under the target
-        let all_snapshots = self.zfs_engine.list_snapshots(name)
-            .map_err(|e| format!("Failed to list snapshots: {}", e))?;
+        // Filter to: target + children (name/) + snapshots on target or children (name@)
+        let child_prefix = format!("{}/", name);
+        let snap_prefix = format!("{}@", name);
 
-        // Collect items to delete: target itself + children + snapshots
-        let target_prefix = format!("{}/", name);
-        let mut to_delete: Vec<String> = Vec::new();
+        let mut to_delete: Vec<String> = all_items.into_iter()
+            .map(|(_, path)| path.to_string_lossy().to_string())
+            .filter(|p| p == name || p.starts_with(&child_prefix) || p.starts_with(&snap_prefix))
+            .collect();
 
-        // Add snapshots first (they must be deleted before datasets)
-        for snap in all_snapshots {
-            to_delete.push(snap.to_string_lossy().to_string());
-        }
-
-        // Add child datasets (filter to those under our target)
-        for (_kind, path) in &all_datasets {
-            let path_str = path.to_string_lossy().to_string();
-            if path_str.starts_with(&target_prefix) {
-                // Also get snapshots for this child
-                if let Ok(child_snaps) = self.zfs_engine.list_snapshots(&path_str) {
-                    for snap in child_snaps {
-                        to_delete.push(snap.to_string_lossy().to_string());
-                    }
-                }
-                to_delete.push(path_str);
-            }
-        }
-
-        // Add the target dataset itself
-        to_delete.push(name.to_string());
-
-        // Sort by depth (number of path components) in descending order
-        // This ensures children/snapshots are deleted before parents
+        // Sort by depth descending (deepest first)
         to_delete.sort_by(|a, b| {
             let depth_a = a.matches('/').count() + a.matches('@').count();
             let depth_b = b.matches('/').count() + b.matches('@').count();
-            depth_b.cmp(&depth_a)  // Descending: deepest first
+            depth_b.cmp(&depth_a)
         });
 
         // Delete each item using lzc_destroy FFI
-        for item in to_delete {
+        for item in &to_delete {
             let c_name = CString::new(item.as_str())
                 .map_err(|_| format!("Invalid path: contains null byte: {}", item))?;
 
             let result = unsafe { lzc_destroy(c_name.as_ptr()) };
 
             if result != 0 {
-                // Translate errno
                 let err_msg = Self::errno_to_string(result);
                 return Err(format!("Failed to destroy '{}': {} (errno {})", item, err_msg, result));
             }
@@ -855,6 +840,7 @@ impl ZfsManager {
     /// * `raw` - Raw/encrypted send (-w)
     /// * `compressed` - Compressed stream (-c)
     /// * `large_blocks` - Allow >128KB blocks (-L)
+    /// * `overwrite` - If true, overwrite existing file; if false, fail if file exists
     pub async fn send_snapshot_to_file(
         &self,
         snapshot: &str,
@@ -865,6 +851,7 @@ impl ZfsManager {
         raw: bool,
         compressed: bool,
         large_blocks: bool,
+        overwrite: bool,
     ) -> Result<u64, ZfsError> {
         // Validate snapshot exists
         if !self.zfs_engine.exists(PathBuf::from(snapshot))
@@ -875,6 +862,15 @@ impl ZfsManager {
         // Validate output file path is absolute
         if !output_file.starts_with('/') {
             return Err("Output file path must be absolute".to_string());
+        }
+
+        // Check if file exists and overwrite is not allowed
+        let output_path = std::path::Path::new(output_file);
+        if output_path.exists() && !overwrite {
+            return Err(format!(
+                "Output file '{}' already exists. Set overwrite: true to replace.",
+                output_file
+            ));
         }
 
         // NOTE: libzetta send_full/send_incremental do NOT support recursive (-R)

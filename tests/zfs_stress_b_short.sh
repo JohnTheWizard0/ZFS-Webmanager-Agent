@@ -27,6 +27,10 @@ API_URL="${API_URL:-http://localhost:9876}"
 API_KEY="${API_KEY:-08670612-43df-4a0c-a556-2288457726a5}"
 CLEANUP="${CLEANUP:-true}"
 
+# Source shared cleanup script
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/cleanup_tests.sh"
+
 # Test resources
 STRESS_POOL="stress_b_pool"
 STRESS_POOL_B="stress_b_pool_alt"
@@ -145,9 +149,7 @@ setup_test_pools() {
 
 cleanup() {
     if [[ "$CLEANUP" == "true" ]]; then
-        log_header "CLEANUP"
-        cleanup_pools
-        log_info "Cleaned up test resources"
+        run_test_cleanup true  # Use shared cleanup (quiet mode)
     else
         log_header "CLEANUP SKIPPED"
         log_info "Pools retained: $STRESS_POOL, $STRESS_POOL_B"
@@ -362,16 +364,23 @@ test_import_with_rename() {
     fi
 
     # Re-export and re-import with original name for subsequent tests
+    # NOTE: After rename, the pool's on-disk identity IS the new name.
+    # To restore, we must import using the NEW name and rename back to original.
     log_test "Restore original pool name"
     response=$(api POST "/v1/pools/$NEW_NAME/export" '{}')
     if ! is_success "$response"; then
         log_info "Export renamed pool failed, trying direct destroy"
         zpool destroy -f "$NEW_NAME" 2>/dev/null || true
+        # Recreate the pool for subsequent tests
+        response=$(api POST "/v1/pools" "{\"name\": \"$STRESS_POOL_B\", \"raid_type\": \"mirror\", \"disks\": [\"$DISK_3\", \"$DISK_4\"]}")
+        is_success "$response" && log_pass || log_fail "Could not recreate pool"
+        return
     fi
 
-    response=$(api POST "/v1/pools/import" "{\"name\": \"$STRESS_POOL_B\"}")
+    # Import using NEW_NAME (on-disk identity) and rename back to original
+    response=$(api POST "/v1/pools/import" "{\"name\": \"$NEW_NAME\", \"new_name\": \"$STRESS_POOL_B\"}")
     if is_success "$response"; then
-        log_info "Restored as $STRESS_POOL_B"
+        log_info "Restored as $STRESS_POOL_B (imported from $NEW_NAME)"
         log_pass
     else
         log_fail "Could not restore: $(json_field "$response" "message")"

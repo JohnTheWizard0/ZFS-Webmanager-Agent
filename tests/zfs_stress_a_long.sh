@@ -27,6 +27,10 @@ API_KEY="${API_KEY:-08670612-43df-4a0c-a556-2288457726a5}"
 CLEANUP="${CLEANUP:-true}"
 SERVICE_NAME="zfs-agent"
 
+# Source shared cleanup script
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/cleanup_tests.sh"
+
 # Test pool names
 STRESS_POOL="stress_test_pool"
 TEST_DATASET="stressdata"
@@ -112,9 +116,10 @@ setup_test_pool() {
 
 cleanup() {
     if [[ "$CLEANUP" == "true" ]]; then
-        log_header "CLEANUP"
-        log_test "Destroying test pool"
-        zpool destroy -f "$STRESS_POOL" 2>/dev/null && log_pass || log_info "Pool not found"
+        run_test_cleanup true  # Use shared cleanup (quiet mode)
+    else
+        log_header "CLEANUP SKIPPED"
+        log_info "Pool $STRESS_POOL retained for inspection"
     fi
 }
 trap cleanup EXIT

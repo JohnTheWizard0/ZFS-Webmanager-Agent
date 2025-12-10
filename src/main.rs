@@ -5,15 +5,46 @@ mod task_manager;
 mod utils;
 mod zfs_management;
 
-use warp::Filter;
+use warp::{Filter, Rejection, Reply, http::StatusCode};
 use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
+use std::convert::Infallible;
 use zfs_management::ZfsManager;
 use task_manager::TaskManager;
 use models::{LastAction, CreatePool, CreateSnapshot, CreateDataset, CommandRequest, ExportPoolRequest, ImportPoolRequest, SetPropertyRequest, CloneSnapshotRequest, RollbackRequest, SendSizeQuery, SendSnapshotRequest, ReceiveSnapshotRequest, ReplicateSnapshotRequest, DeleteDatasetQuery};
 use handlers::*;
 use auth::*;
 use utils::with_action_tracking;
+
+/// Custom rejection handler for API errors
+/// Converts ApiKeyError rejections into proper HTTP 401 responses
+async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
+    let (code, message) = if let Some(e) = err.find::<ApiKeyError>() {
+        match e {
+            ApiKeyError::Missing => (StatusCode::UNAUTHORIZED, "Unauthorized: API key required"),
+            ApiKeyError::Invalid => (StatusCode::UNAUTHORIZED, "Unauthorized: Invalid API key"),
+        }
+    } else if err.is_not_found() {
+        (StatusCode::NOT_FOUND, "Endpoint not found")
+    } else if let Some(_) = err.find::<warp::reject::MethodNotAllowed>() {
+        (StatusCode::METHOD_NOT_ALLOWED, "Method not allowed")
+    } else if let Some(_) = err.find::<warp::reject::InvalidHeader>() {
+        (StatusCode::BAD_REQUEST, "Invalid header")
+    } else if let Some(_) = err.find::<warp::body::BodyDeserializeError>() {
+        (StatusCode::BAD_REQUEST, "Invalid request body")
+    } else {
+        // Log unexpected rejections for debugging
+        eprintln!("Unhandled rejection: {:?}", err);
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error")
+    };
+
+    let json = warp::reply::json(&serde_json::json!({
+        "status": "error",
+        "message": message
+    }));
+
+    Ok(warp::reply::with_status(json, code))
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -535,7 +566,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .or(task_routes)       // BEFORE snapshot_routes (has /send, /replicate)
             .or(snapshot_routes)   // Generic POST /snapshots/{path} last
             .or(command_routes)
-    );
+    ).recover(handle_rejection);
 
     // Start server
     println!("Server starting on port: 9876");

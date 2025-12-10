@@ -1,6 +1,6 @@
 use crate::models::*;
 use crate::task_manager::TaskManager;
-use crate::utils::{success_response, error_response};
+use crate::utils::{success_response, error_response, validate_snapshot_name, validate_dataset_name};
 use crate::zfs_management::{ZfsManager, RollbackError};
 use warp::{Rejection, Reply};
 use std::sync::{Arc, RwLock};
@@ -484,6 +484,11 @@ pub async fn create_snapshot_handler(
     body: CreateSnapshot,
     zfs: ZfsManager,
 ) -> Result<impl Reply, Rejection> {
+    // Validate snapshot name before attempting creation
+    if let Err(msg) = validate_snapshot_name(&body.snapshot_name) {
+        return Ok(error_response(&format!("Invalid snapshot name: {}", msg)));
+    }
+
     match zfs.create_snapshot(&dataset, &body.snapshot_name).await {
         Ok(_) => Ok(success_response(ActionResponse {
             status: "success".to_string(),
@@ -525,6 +530,11 @@ pub async fn list_datasets_handler(pool: String, zfs: ZfsManager) -> Result<impl
 }
 
 pub async fn create_dataset_handler(body: CreateDataset, zfs: ZfsManager) -> Result<impl Reply, Rejection> {
+    // Validate dataset name before attempting creation
+    if let Err(msg) = validate_dataset_name(&body.name) {
+        return Ok(error_response(&format!("Invalid dataset name: {}", msg)));
+    }
+
     match zfs.create_dataset(body).await {
         Ok(_) => Ok(success_response(ActionResponse {
             status: "success".to_string(),
@@ -1046,6 +1056,7 @@ pub async fn send_snapshot_handler(
             body.raw,
             body.compressed,
             body.large_blocks,
+            body.overwrite,
         ).await;
 
         match result {

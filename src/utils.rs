@@ -17,6 +17,39 @@ pub fn error_response(message: &str) -> warp::reply::Json {
     warp::reply::json(&response)
 }
 
+/// Validate ZFS snapshot name
+/// Returns Ok(()) if valid, Err(message) if invalid
+pub fn validate_snapshot_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("Snapshot name cannot be empty".to_string());
+    }
+    if name.contains(' ') {
+        return Err("Snapshot name cannot contain spaces".to_string());
+    }
+    if name.contains('@') {
+        return Err("Snapshot name cannot contain '@'".to_string());
+    }
+    if name.starts_with('/') || name.ends_with('/') {
+        return Err("Snapshot name cannot start or end with '/'".to_string());
+    }
+    Ok(())
+}
+
+/// Validate ZFS dataset name (the final component, not full path)
+/// Returns Ok(()) if valid, Err(message) if invalid
+pub fn validate_dataset_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("Dataset name cannot be empty".to_string());
+    }
+    if name.contains(' ') {
+        return Err("Dataset name cannot contain spaces".to_string());
+    }
+    if name.contains('@') {
+        return Err("Dataset name cannot contain '@'".to_string());
+    }
+    Ok(())
+}
+
 // FIXED: Simple action tracking filter
 pub fn with_action_tracking(
     function_name: &'static str,
@@ -108,5 +141,76 @@ mod tests {
         let r2 = reader2.read().unwrap();
 
         assert_eq!(r1.as_ref().unwrap().function, r2.as_ref().unwrap().function);
+    }
+
+    /// Test: validate_snapshot_name accepts valid names
+    #[test]
+    fn test_validate_snapshot_name_valid() {
+        assert!(validate_snapshot_name("backup-2025-01-01").is_ok());
+        assert!(validate_snapshot_name("snap_123").is_ok());
+        assert!(validate_snapshot_name("daily").is_ok());
+    }
+
+    /// Test: validate_snapshot_name rejects spaces
+    #[test]
+    fn test_validate_snapshot_name_rejects_spaces() {
+        let result = validate_snapshot_name("snap with spaces");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("spaces"));
+    }
+
+    /// Test: validate_snapshot_name rejects @ symbol
+    #[test]
+    fn test_validate_snapshot_name_rejects_at() {
+        let result = validate_snapshot_name("snap@name");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("@"));
+    }
+
+    /// Test: validate_snapshot_name rejects empty
+    #[test]
+    fn test_validate_snapshot_name_rejects_empty() {
+        let result = validate_snapshot_name("");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("empty"));
+    }
+
+    /// Test: validate_snapshot_name rejects leading/trailing slashes
+    #[test]
+    fn test_validate_snapshot_name_rejects_slashes() {
+        assert!(validate_snapshot_name("/snap").is_err());
+        assert!(validate_snapshot_name("snap/").is_err());
+    }
+
+    /// Test: validate_dataset_name accepts valid names
+    #[test]
+    fn test_validate_dataset_name_valid() {
+        assert!(validate_dataset_name("mydata").is_ok());
+        assert!(validate_dataset_name("data-2025").is_ok());
+        assert!(validate_dataset_name("data_test").is_ok());
+    }
+
+    /// Test: validate_dataset_name rejects spaces
+    #[test]
+    fn test_validate_dataset_name_rejects_spaces() {
+        let result = validate_dataset_name("data with spaces");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("spaces"));
+    }
+
+    /// Test: validate_dataset_name rejects @ symbol
+    #[test]
+    fn test_validate_dataset_name_rejects_at() {
+        let result = validate_dataset_name("data@name");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("@"));
+    }
+
+    /// Test: validate_dataset_name rejects empty
+    #[test]
+    fn test_validate_dataset_name_rejects_empty() {
+        let result = validate_dataset_name("");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("empty"));
     }
 }
