@@ -2,8 +2,9 @@
 // Pool handlers: list, status, create, destroy, export, import
 
 use crate::models::{
-    ActionResponse, CreatePool, ExportPoolRequest, ImportPoolRequest, ImportablePoolInfo,
-    ImportablePoolsResponse, PoolListResponse, PoolStatusResponse,
+    ActionResponse, ClearPoolRequest, ClearPoolResponse, CreatePool, ExportPoolRequest,
+    ImportPoolRequest, ImportablePoolInfo, ImportablePoolsResponse, PoolListResponse,
+    PoolStatusResponse,
 };
 use crate::utils::{error_response, success_response};
 use crate::zfs_management::ZfsManager;
@@ -137,5 +138,35 @@ pub async fn import_pool_handler(
             message: format!("Pool '{}' imported successfully", imported_name),
         })),
         Err(e) => Ok(error_response(&format!("Failed to import pool: {}", e))),
+    }
+}
+
+// =========================================================================
+// Pool Clear Handler (FFI)
+// =========================================================================
+
+/// Clear error counters on a pool or specific device
+/// POST /v1/pools/{name}/clear
+pub async fn clear_pool_handler(
+    pool: String,
+    body: ClearPoolRequest,
+    zfs: ZfsManager,
+) -> Result<impl Reply, Rejection> {
+    let device_ref = body.device.as_deref();
+
+    match zfs.clear_pool(&pool, device_ref).await {
+        Ok(_) => {
+            let message = match &body.device {
+                Some(dev) => format!("Error counters cleared for device '{}' in pool '{}'", dev, pool),
+                None => format!("Error counters cleared for pool '{}'", pool),
+            };
+            Ok(success_response(ClearPoolResponse {
+                status: "success".to_string(),
+                pool,
+                device: body.device,
+                message,
+            }))
+        }
+        Err(e) => Ok(error_response(&format!("Failed to clear pool errors: {}", e))),
     }
 }

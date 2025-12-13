@@ -1,6 +1,7 @@
 // zfs_management/pools.rs
-// Pool operations: list, status, create, destroy, export, import
+// Pool operations: list, status, create, destroy, export, import, clear
 
+use super::ffi::{zpool_clear, zpool_open_canfail, LibzfsGuard, PoolGuard};
 use super::helpers::errno_to_string;
 use super::manager::ZfsManager;
 use super::types::{ImportablePool, PoolStatus, ZfsError};
@@ -290,6 +291,116 @@ impl ZfsManager {
             Err(format!(
                 "Failed to import pool '{}' as '{}': {}",
                 name, new_name, err_desc
+            ))
+        }
+    }
+
+    // =========================================================================
+    // Pool Clear Operations (FFI)
+    // =========================================================================
+
+    /// Clear error counters on a pool or specific device
+    /// FFI implementation using zpool_clear()
+    ///
+    /// # Arguments
+    /// * `pool` - Pool name
+    /// * `device` - Optional device path to clear. If None, clears all devices.
+    ///
+    /// # Returns
+    /// * `Ok(())` on success
+    /// * `Err(ZfsError)` on failure
+    pub async fn clear_pool(&self, pool: &str, device: Option<&str>) -> Result<(), ZfsError> {
+        // Validate pool exists
+        if !self
+            .zpool_engine
+            .exists(pool)
+            .map_err(|e| format!("Failed to check pool existence: {}", e))?
+        {
+            return Err(format!("Pool '{}' does not exist", pool));
+        }
+
+        // Validate device path if provided
+        if let Some(dev) = device {
+            if dev.contains('\0') || dev.contains(';') || dev.contains('&') || dev.contains('|') {
+                return Err(format!(
+                    "Invalid device path '{}': contains forbidden characters",
+                    dev
+                ));
+            }
+        }
+
+        let c_pool = CString::new(pool)
+            .map_err(|_| format!("Invalid pool name '{}': contains null byte", pool))?;
+
+        let c_device = device
+            .map(|d| {
+                CString::new(d).map_err(|_| format!("Invalid device '{}': contains null byte", d))
+            })
+            .transpose()?;
+
+        let hdl = unsafe { libzfs_init() };
+        if hdl.is_null() {
+            return Err("Failed to initialize libzfs handle".to_string());
+        }
+
+        let _libzfs_guard = LibzfsGuard(hdl);
+
+        let zhp = unsafe { zpool_open_canfail(hdl, c_pool.as_ptr()) };
+        if zhp.is_null() {
+            let err_desc = unsafe {
+                let err_ptr = libzfs_error_description(hdl);
+                if !err_ptr.is_null() {
+                    std::ffi::CStr::from_ptr(err_ptr)
+                        .to_string_lossy()
+                        .into_owned()
+                } else {
+                    "pool not found".to_string()
+                }
+            };
+            return Err(format!("Failed to open pool '{}': {}", pool, err_desc));
+        }
+
+        let _pool_guard = PoolGuard(zhp);
+
+        // Call zpool_clear with device pointer (NULL for all devices)
+        let device_ptr = c_device
+            .as_ref()
+            .map(|d| d.as_ptr())
+            .unwrap_or(ptr::null());
+
+        // Create empty nvlist for reopen_policy (cannot be NULL - causes fnvlist_size crash)
+        let mut reopen_policy: *mut nvpair_sys::nvlist_t = ptr::null_mut();
+        let ret = unsafe {
+            nvpair_sys::nvlist_alloc(&mut reopen_policy, nvpair_sys::NV_UNIQUE_NAME, 0)
+        };
+        if ret != 0 || reopen_policy.is_null() {
+            return Err(format!(
+                "Failed to allocate reopen_policy nvlist: errno {}",
+                ret
+            ));
+        }
+        let _reopen_guard = super::ffi::NvlistGuard(reopen_policy);
+
+        let result = unsafe { zpool_clear(zhp, device_ptr, reopen_policy) };
+
+        if result == 0 {
+            Ok(())
+        } else {
+            let err_desc = unsafe {
+                let err_ptr = libzfs_error_description(hdl);
+                if !err_ptr.is_null() {
+                    std::ffi::CStr::from_ptr(err_ptr)
+                        .to_string_lossy()
+                        .into_owned()
+                } else {
+                    errno_to_string(result).to_string()
+                }
+            };
+            Err(format!(
+                "Failed to clear errors on pool '{}'{}: {}",
+                pool,
+                device.map(|d| format!(" device '{}'", d)).unwrap_or_default(),
+                err_desc
             ))
         }
     }

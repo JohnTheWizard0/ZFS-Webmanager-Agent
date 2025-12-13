@@ -24,7 +24,7 @@ zfs-agent/
 │   ├── main.rs              # Entry point, server setup, routes
 │   ├── handlers/            # API route handlers (modular)
 │   │   ├── mod.rs           # Re-exports all handlers
-│   │   ├── docs.rs          # openapi, docs, health, features
+│   │   ├── docs.rs          # docs (Swagger/JSON), openapi (generated), health, features
 │   │   ├── safety.rs        # safety_status, safety_override
 │   │   ├── pools.rs         # pool handlers
 │   │   ├── datasets.rs      # dataset handlers
@@ -62,7 +62,7 @@ zfs-agent/
 ├── target/                  # Build artifacts (git-ignored)
 ├── Cargo.toml               # Rust dependencies
 ├── Cargo.lock               # Locked dependency versions
-├── openapi.yaml             # API specification (OpenAPI 3.0)
+├── api.json                 # API definition (source of truth, lean format)
 ├── features.json            # ZFS feature list (loaded at runtime by /features)
 ├── settings.json            # Agent configuration (safety settings)
 ├── rust-toolchain.toml      # Rust version pinning

@@ -108,9 +108,10 @@
     {
       "name": "Clear pool errors",
       "category": "pool",
-      "implemented": false,
-      "implementation": "planned",
-      "notes": "Reset error counters after repair"
+      "implemented": true,
+      "implementation": "ffi",
+      "endpoint": "POST /v1/pools/{name}/clear",
+      "notes": "Clear error counters via zpool_clear() FFI"
     },
     {
       "name": "Pool properties",

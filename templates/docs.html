@@ -20,11 +20,11 @@
 
         /* Dark theme */
         [data-theme="dark"] body {
-            background: #1a0a10;
+            background: #131314;
         }
         @media (prefers-color-scheme: dark) {
             :root:not([data-theme="light"]) body {
-                background: #1a0a10;
+                background: #131314;
             }
         }
 
@@ -39,25 +39,38 @@
         .swagger-ui .topbar-wrapper {
             flex: 1;
         }
-        .theme-toggle {
-            background: rgba(255,255,255,0.15);
-            border: 1px solid rgba(255,255,255,0.25);
+        /* Fixed position toggle - always visible */
+        .theme-toggle-fixed {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            z-index: 99999;
+            background: #6B1A30;
+            border: 2px solid #3D0E1A;
             border-radius: 50%;
-            width: 36px;
-            height: 36px;
+            width: 44px;
+            height: 44px;
             cursor: pointer;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.1rem;
+            font-size: 1.3rem;
             transition: all 0.2s ease;
             color: #FDFCFB;
-            margin-left: 16px;
-            flex-shrink: 0;
+            box-shadow: 0 2px 8px rgba(61, 14, 26, 0.3);
         }
-        .theme-toggle:hover {
-            background: rgba(255,255,255,0.25);
+        .theme-toggle-fixed:hover {
+            background: #3D0E1A;
             transform: scale(1.1);
+            box-shadow: 0 4px 12px rgba(61, 14, 26, 0.4);
+        }
+        [data-theme="dark"] .theme-toggle-fixed {
+            background: #FDFCFB;
+            border-color: #E2E0DD;
+            color: #3D0E1A;
+        }
+        [data-theme="dark"] .theme-toggle-fixed:hover {
+            background: #E2E0DD;
         }
 
         /* ZFSreload theme overrides - Light mode */
@@ -75,7 +88,7 @@
         /* Dark mode overrides */
         [data-theme="dark"] .swagger-ui .scheme-container,
         [data-theme="dark"] .swagger-ui .opblock .opblock-section-header {
-            background: #2d1520;
+            background: #59383e;
         }
         [data-theme="dark"] .swagger-ui .info .title {
             color: #FDFCFB;
@@ -101,47 +114,47 @@
         }
         [data-theme="dark"] .swagger-ui .opblock-body pre.microlight,
         [data-theme="dark"] .swagger-ui .highlight-code {
-            background: #2d1520 !important;
+            background: #232331 !important;
         }
         [data-theme="dark"] .swagger-ui section.models {
-            background: #2d1520;
-            border-color: #5C3A48;
+            background: #232331;
+            border-color: #59383e;
         }
         [data-theme="dark"] .swagger-ui section.models h4 {
             color: #FDFCFB;
         }
         [data-theme="dark"] .swagger-ui .model-container,
         [data-theme="dark"] .swagger-ui .opblock-body {
-            background: #3D1E2A;
+            background: #2b2b31;
         }
         [data-theme="dark"] .swagger-ui .opblock {
-            background: rgba(61, 30, 42, 0.5);
-            border-color: #5C3A48;
+            background: rgba(43, 43, 49, 0.7);
+            border-color: #59383e;
         }
         [data-theme="dark"] .swagger-ui input[type=text],
         [data-theme="dark"] .swagger-ui textarea {
-            background: #2d1520;
+            background: #232331;
             color: #FDFCFB;
-            border-color: #5C3A48;
+            border-color: #59383e;
         }
         [data-theme="dark"] .swagger-ui select {
-            background: #2d1520;
+            background: #232331;
             color: #FDFCFB;
-            border-color: #5C3A48;
+            border-color: #59383e;
         }
         [data-theme="dark"] .swagger-ui .btn {
             color: #FDFCFB;
         }
         [data-theme="dark"] .swagger-ui .btn.cancel {
-            background: #5C3A48;
-            border-color: #5C3A48;
+            background: #59383e;
+            border-color: #59383e;
         }
 
         /* Auto dark mode via media query */
         @media (prefers-color-scheme: dark) {
             :root:not([data-theme="light"]) .swagger-ui .scheme-container,
             :root:not([data-theme="light"]) .swagger-ui .opblock .opblock-section-header {
-                background: #2d1520;
+                background: #59383e;
             }
             :root:not([data-theme="light"]) .swagger-ui .info .title {
                 color: #FDFCFB;
@@ -158,24 +171,27 @@
                 color: #FDFCFB !important;
             }
             :root:not([data-theme="light"]) .swagger-ui .opblock-body pre.microlight {
-                background: #2d1520 !important;
+                background: #232331 !important;
             }
             :root:not([data-theme="light"]) .swagger-ui section.models {
-                background: #2d1520;
-                border-color: #5C3A48;
+                background: #232331;
+                border-color: #59383e;
             }
             :root:not([data-theme="light"]) .swagger-ui .model-container,
             :root:not([data-theme="light"]) .swagger-ui .opblock-body {
-                background: #3D1E2A;
+                background: #2b2b31;
             }
             :root:not([data-theme="light"]) .swagger-ui .opblock {
-                background: rgba(61, 30, 42, 0.5);
-                border-color: #5C3A48;
+                background: rgba(43, 43, 49, 0.7);
+                border-color: #59383e;
             }
         }
     </style>
 </head>
 <body>
+    <button class="theme-toggle-fixed" onclick="toggleTheme()" title="Toggle dark/light mode">
+        <span class="theme-icon">&#9790;</span>
+    </button>
     <div id="swagger-ui"></div>
     <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js" charset="UTF-8"></script>
     <script>
@@ -208,23 +224,20 @@
 
         window.onload = function() {
             window.ui = SwaggerUIBundle({
-                url: "/v1/openapi.yaml",
+                url: "/v1/openapi.json",
                 dom_id: '#swagger-ui',
                 deepLinking: true,
                 presets: [
                     SwaggerUIBundle.presets.apis
                 ],
                 onComplete: function() {
-                    // Inject theme toggle button into topbar
-                    const topbar = document.querySelector('.swagger-ui .topbar');
-                    if (topbar) {
-                        const btn = document.createElement('button');
-                        btn.className = 'theme-toggle';
-                        btn.onclick = toggleTheme;
-                        btn.title = 'Toggle dark/light mode';
-                        const currentTheme = document.documentElement.getAttribute('data-theme') || getPreferredTheme();
-                        btn.innerHTML = '<span class="theme-icon">' + (currentTheme === 'dark' ? '&#9728;' : '&#9790;') + '</span>';
-                        topbar.appendChild(btn);
+                    // Add note about JSON endpoint for AI/programmatic access
+                    const info = document.querySelector('.swagger-ui .info');
+                    if (info) {
+                        const note = document.createElement('div');
+                        note.style.cssText = 'margin-top: 12px; padding: 8px 12px; background: rgba(107,26,48,0.1); border-left: 3px solid #6B1A30; border-radius: 4px; font-size: 13px;';
+                        note.innerHTML = '<strong>AI/Programmatic access:</strong> <code style="background: rgba(0,0,0,0.05); padding: 2px 6px; border-radius: 3px;">GET /v1/docs?format=json</code>';
+                        info.appendChild(note);
                     }
                 }
             });

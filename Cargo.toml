@@ -16,4 +16,3 @@ libzfs-sys = "0.5.11"             # FFI bindings for zpool_import with rename
 nvpair-sys = "0.1"                # nvlist FFI for pool config lookup (matches libzfs-sys dep)
 libzetta-zfs-core-sys = "0.5.2"   # FFI bindings for lzc_clone, lzc_promote
 libc = "0.2"                      # For CString FFI
-dirs = "6.0"

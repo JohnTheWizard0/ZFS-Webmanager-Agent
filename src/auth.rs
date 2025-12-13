@@ -1,26 +1,54 @@
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use uuid::Uuid;
 use warp::{http::HeaderMap, Rejection};
 
 const API_KEY_FILE: &str = "api_key.txt";
+const CREDENTIALS_DIR: &str = "credentials";
+
+/// Get the credentials directory path (relative to executable)
+/// Returns: <executable_dir>/credentials/
+pub fn get_credentials_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let exe_path = std::env::current_exe()?;
+    let exe_dir = exe_path
+        .parent()
+        .ok_or("Failed to get executable directory")?;
+    Ok(exe_dir.join(CREDENTIALS_DIR))
+}
+
+/// Set restrictive permissions (0600) on a file - owner read/write only
+fn set_secure_permissions(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let permissions = fs::Permissions::from_mode(0o600);
+    fs::set_permissions(path, permissions)?;
+    Ok(())
+}
+
+/// Set restrictive permissions (0700) on a directory - owner only
+fn set_secure_dir_permissions(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let permissions = fs::Permissions::from_mode(0o700);
+    fs::set_permissions(path, permissions)?;
+    Ok(())
+}
 
 pub fn get_or_create_api_key() -> Result<String, Box<dyn std::error::Error>> {
-    let mut api_key_path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
-    api_key_path.push("zfs_webmanager");
+    let credentials_dir = get_credentials_dir()?;
 
-    // Create directory if it doesn't exist
-    if !api_key_path.exists() {
-        fs::create_dir_all(&api_key_path)?;
+    // Create credentials directory with secure permissions if it doesn't exist
+    if !credentials_dir.exists() {
+        fs::create_dir_all(&credentials_dir)?;
+        set_secure_dir_permissions(&credentials_dir)?;
     }
 
-    api_key_path.push(API_KEY_FILE);
+    let api_key_path = credentials_dir.join(API_KEY_FILE);
 
     if api_key_path.exists() {
         // Read existing API key
         let api_key = fs::read_to_string(&api_key_path)?.trim().to_string();
 
         if !api_key.is_empty() {
+            // Ensure permissions are still secure (SEC-04)
+            set_secure_permissions(&api_key_path)?;
             return Ok(api_key);
         }
     }
@@ -28,6 +56,9 @@ pub fn get_or_create_api_key() -> Result<String, Box<dyn std::error::Error>> {
     // Generate new API key
     let api_key = Uuid::new_v4().to_string();
     fs::write(&api_key_path, &api_key)?;
+
+    // Set secure permissions (0600) - owner read/write only (SEC-04)
+    set_secure_permissions(&api_key_path)?;
 
     Ok(api_key)
 }

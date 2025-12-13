@@ -1,0 +1,694 @@
+{
+  "version": "0.6.0",
+  "title": "ZFS Web Manager API",
+  "base_url": "/v1",
+  "auth": {
+    "type": "api_key",
+    "header": "X-API-Key",
+    "description": "API key generated on first run, stored in ~/.zfs_webmanager/api_key"
+  },
+  "endpoints": [
+    {
+      "method": "GET",
+      "path": "/health",
+      "tag": "system",
+      "summary": "Health check",
+      "description": "Returns server status, version, and last action",
+      "auth": false,
+      "response": {
+        "status": {"type": "string", "example": "success"},
+        "version": {"type": "string", "example": "0.6.0"},
+        "last_action": {
+          "type": "object",
+          "nullable": true,
+          "properties": {
+            "function": {"type": "string"},
+            "timestamp": {"type": "integer"}
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/pools",
+      "tag": "pools",
+      "summary": "List pools",
+      "description": "Returns list of all ZFS pool names",
+      "auth": true,
+      "response": {
+        "status": {"type": "string"},
+        "pools": {"type": "array", "items": "string", "example": ["tank", "backup"]}
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/pools",
+      "tag": "pools",
+      "summary": "Create pool",
+      "description": "Create a new ZFS pool",
+      "auth": true,
+      "body": {
+        "name": {"type": "string", "required": true, "description": "Pool name", "example": "tank"},
+        "disks": {"type": "array", "items": "string", "required": true, "description": "List of disk paths", "example": ["/dev/sda", "/dev/sdb"]},
+        "raid_type": {"type": "string", "enum": ["mirror", "raidz", "raidz2", "raidz3"], "description": "RAID type (optional for single disk)"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "message": {"type": "string"}
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/pools/{name}",
+      "tag": "pools",
+      "summary": "Get pool status",
+      "description": "Returns detailed status of a specific pool",
+      "auth": true,
+      "params": {
+        "name": {"in": "path", "type": "string", "required": true, "description": "Pool name"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "name": {"type": "string"},
+        "health": {"type": "string", "enum": ["Online", "Degraded", "Faulted", "Offline", "Removed", "Unavail"]},
+        "size": {"type": "integer", "description": "Total size in bytes"},
+        "allocated": {"type": "integer", "description": "Allocated space in bytes"},
+        "free": {"type": "integer", "description": "Free space in bytes"},
+        "capacity": {"type": "integer", "description": "Capacity percentage (0-100)"},
+        "vdevs": {"type": "integer", "description": "Number of virtual devices"},
+        "errors": {"type": "string", "nullable": true}
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/pools/{name}",
+      "tag": "pools",
+      "summary": "Destroy pool",
+      "description": "Destroy a ZFS pool",
+      "auth": true,
+      "params": {
+        "name": {"in": "path", "type": "string", "required": true, "description": "Pool name"},
+        "force": {"in": "query", "type": "boolean", "default": false, "description": "Force destroy"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "message": {"type": "string"}
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/pools/{name}/export",
+      "tag": "pools",
+      "summary": "Export pool",
+      "description": "Export a pool from the system",
+      "auth": true,
+      "params": {
+        "name": {"in": "path", "type": "string", "required": true, "description": "Pool name"}
+      },
+      "body": {
+        "force": {"type": "boolean", "default": false, "description": "Force export even if filesystems are in use"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "message": {"type": "string"}
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/pools/import",
+      "tag": "pools",
+      "summary": "Import pool",
+      "description": "Import an exported ZFS pool",
+      "auth": true,
+      "body": {
+        "name": {"type": "string", "required": true, "description": "Pool name to import"},
+        "dir": {"type": "string", "description": "Directory to search for pool"},
+        "new_name": {"type": "string", "description": "Rename pool during import (CLI-based)"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "message": {"type": "string"}
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/pools/importable",
+      "tag": "pools",
+      "summary": "List importable pools",
+      "description": "Discover pools available for import",
+      "auth": true,
+      "params": {
+        "dir": {"in": "query", "type": "string", "description": "Directory to search (defaults to /dev/)"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "pools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {"type": "string"},
+              "health": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/pools/{name}/vdev",
+      "tag": "pools",
+      "summary": "Add vdev to pool",
+      "description": "Add a new vdev to an existing pool to expand storage or add special devices",
+      "auth": true,
+      "params": {
+        "name": {"in": "path", "type": "string", "required": true, "description": "Pool name"}
+      },
+      "body": {
+        "vdev_type": {"type": "string", "required": true, "enum": ["disk", "mirror", "raidz", "raidz2", "raidz3", "log", "cache", "spare", "special", "dedup"], "description": "Type of vdev to add"},
+        "devices": {"type": "array", "items": "string", "required": true, "description": "List of device paths", "example": ["/dev/sdc", "/dev/sdd"]},
+        "force": {"type": "boolean", "default": false, "description": "Force add, skip some safety checks"},
+        "check_ashift": {"type": "boolean", "default": true, "description": "Warn if ashift mismatch with pool"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "pool": {"type": "string"},
+        "vdev_type": {"type": "string"},
+        "devices": {"type": "array", "items": "string"},
+        "message": {"type": "string"}
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/pools/{name}/vdev/{device}",
+      "tag": "pools",
+      "summary": "Remove vdev from pool",
+      "description": "Remove a vdev from an existing pool",
+      "auth": true,
+      "params": {
+        "name": {"in": "path", "type": "string", "required": true, "description": "Pool name"},
+        "device": {"in": "path", "type": "string", "required": true, "description": "Device path to remove"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "pool": {"type": "string"},
+        "device": {"type": "string"},
+        "message": {"type": "string"}
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/pools/{name}/clear",
+      "tag": "pools",
+      "summary": "Clear pool errors",
+      "description": "Clear error counters for a pool",
+      "auth": true,
+      "params": {
+        "name": {"in": "path", "type": "string", "required": true, "description": "Pool name"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "message": {"type": "string"}
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/pools/{name}/scrub",
+      "tag": "scrub",
+      "summary": "Get scrub status",
+      "description": "Returns current scrub/resilver status with progress",
+      "auth": true,
+      "params": {
+        "name": {"in": "path", "type": "string", "required": true, "description": "Pool name"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "pool": {"type": "string"},
+        "pool_health": {"type": "string"},
+        "pool_errors": {"type": "string", "nullable": true},
+        "scan_state": {"type": "string", "enum": ["none", "scanning", "finished", "canceled"]},
+        "scan_function": {"type": "string", "enum": ["scrub", "resilver", "errorscrub"], "nullable": true},
+        "start_time": {"type": "integer", "nullable": true},
+        "end_time": {"type": "integer", "nullable": true},
+        "to_examine": {"type": "integer", "nullable": true},
+        "examined": {"type": "integer", "nullable": true},
+        "scan_errors": {"type": "integer", "nullable": true},
+        "percent_done": {"type": "number", "nullable": true}
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/pools/{name}/scrub",
+      "tag": "scrub",
+      "summary": "Start scrub",
+      "description": "Start or resume a scrub on the pool",
+      "auth": true,
+      "params": {
+        "name": {"in": "path", "type": "string", "required": true, "description": "Pool name"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "message": {"type": "string"}
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/pools/{name}/scrub/pause",
+      "tag": "scrub",
+      "summary": "Pause scrub",
+      "description": "Pause an active scrub",
+      "auth": true,
+      "params": {
+        "name": {"in": "path", "type": "string", "required": true, "description": "Pool name"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "message": {"type": "string"}
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/pools/{name}/scrub/stop",
+      "tag": "scrub",
+      "summary": "Stop scrub",
+      "description": "Stop/cancel an active scrub",
+      "auth": true,
+      "params": {
+        "name": {"in": "path", "type": "string", "required": true, "description": "Pool name"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "message": {"type": "string"}
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/datasets/{pool}",
+      "tag": "datasets",
+      "summary": "List datasets",
+      "description": "List all datasets in a pool",
+      "auth": true,
+      "params": {
+        "pool": {"in": "path", "type": "string", "required": true, "description": "Pool name"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "datasets": {"type": "array", "items": "string"}
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/datasets",
+      "tag": "datasets",
+      "summary": "Create dataset",
+      "description": "Create a new filesystem or volume",
+      "auth": true,
+      "body": {
+        "name": {"type": "string", "required": true, "description": "Full dataset path", "example": "tank/data"},
+        "kind": {"type": "string", "required": true, "enum": ["filesystem", "volume"], "description": "Dataset type"},
+        "properties": {"type": "object", "description": "Optional ZFS properties", "example": {"compression": "lz4", "quota": "10G"}}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "message": {"type": "string"}
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/datasets/{path}",
+      "tag": "datasets",
+      "summary": "Delete dataset",
+      "description": "Delete a dataset (supports nested paths like pool/dataset/child)",
+      "auth": true,
+      "params": {
+        "path": {"in": "path", "type": "string", "required": true, "description": "Full dataset path"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "message": {"type": "string"}
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/datasets/{path}/properties",
+      "tag": "datasets",
+      "summary": "Get dataset properties",
+      "description": "Returns all properties of a dataset",
+      "auth": true,
+      "params": {
+        "path": {"in": "path", "type": "string", "required": true, "description": "Full dataset path"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "name": {"type": "string"},
+        "dataset_type": {"type": "string", "enum": ["filesystem", "volume", "snapshot", "bookmark", "unknown"]},
+        "available": {"type": "integer", "nullable": true},
+        "used": {"type": "integer", "nullable": true},
+        "referenced": {"type": "integer", "nullable": true},
+        "compression": {"type": "string", "nullable": true},
+        "compression_ratio": {"type": "number", "nullable": true},
+        "readonly": {"type": "boolean", "nullable": true},
+        "creation": {"type": "integer", "nullable": true},
+        "quota": {"type": "integer", "nullable": true},
+        "reservation": {"type": "integer", "nullable": true},
+        "mountpoint": {"type": "string", "nullable": true},
+        "mounted": {"type": "boolean", "nullable": true}
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/datasets/{path}/properties",
+      "tag": "datasets",
+      "summary": "Set dataset property",
+      "description": "Set a property on a dataset (CLI-based)",
+      "auth": true,
+      "params": {
+        "path": {"in": "path", "type": "string", "required": true, "description": "Full dataset path"}
+      },
+      "body": {
+        "property": {"type": "string", "required": true, "description": "Property name", "example": "compression"},
+        "value": {"type": "string", "required": true, "description": "Property value", "example": "lz4"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "message": {"type": "string"}
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/datasets/{path}/promote",
+      "tag": "datasets",
+      "summary": "Promote clone",
+      "description": "Promote a clone to an independent dataset",
+      "auth": true,
+      "params": {
+        "path": {"in": "path", "type": "string", "required": true, "description": "Clone dataset path"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "dataset": {"type": "string"},
+        "message": {"type": "string"}
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/datasets/{path}/rollback",
+      "tag": "datasets",
+      "summary": "Rollback dataset",
+      "description": "Rollback a dataset to a previous snapshot",
+      "auth": true,
+      "params": {
+        "path": {"in": "path", "type": "string", "required": true, "description": "Dataset path"}
+      },
+      "body": {
+        "snapshot": {"type": "string", "required": true, "description": "Target snapshot name (without @)"},
+        "force_destroy_newer": {"type": "boolean", "default": false, "description": "Destroy snapshots newer than target"},
+        "force_destroy_clones": {"type": "boolean", "default": false, "description": "Also destroy clones of newer snapshots"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "dataset": {"type": "string"},
+        "snapshot": {"type": "string"},
+        "message": {"type": "string"},
+        "destroyed_snapshots": {"type": "array", "items": "string", "nullable": true},
+        "destroyed_clones": {"type": "array", "items": "string", "nullable": true}
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/snapshots/{dataset}",
+      "tag": "snapshots",
+      "summary": "List snapshots",
+      "description": "List all snapshots for a dataset",
+      "auth": true,
+      "params": {
+        "dataset": {"in": "path", "type": "string", "required": true, "description": "Dataset path"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "items": {"type": "array", "items": "string"}
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/snapshots/{dataset}",
+      "tag": "snapshots",
+      "summary": "Create snapshot",
+      "description": "Create a new snapshot",
+      "auth": true,
+      "params": {
+        "dataset": {"in": "path", "type": "string", "required": true, "description": "Dataset path"}
+      },
+      "body": {
+        "snapshot_name": {"type": "string", "required": true, "description": "Snapshot name (without @)", "example": "backup-2025-01-01"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "message": {"type": "string"}
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/snapshots/{dataset}/{snapshot}",
+      "tag": "snapshots",
+      "summary": "Delete snapshot",
+      "description": "Delete a snapshot",
+      "auth": true,
+      "params": {
+        "dataset": {"in": "path", "type": "string", "required": true, "description": "Dataset path"},
+        "snapshot": {"in": "path", "type": "string", "required": true, "description": "Snapshot name"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "message": {"type": "string"}
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/snapshots/{dataset}/{snapshot}/clone",
+      "tag": "snapshots",
+      "summary": "Clone snapshot",
+      "description": "Create a writable clone from a snapshot",
+      "auth": true,
+      "params": {
+        "dataset": {"in": "path", "type": "string", "required": true, "description": "Dataset path"},
+        "snapshot": {"in": "path", "type": "string", "required": true, "description": "Snapshot name"}
+      },
+      "body": {
+        "target": {"type": "string", "required": true, "description": "Full path for the new clone dataset", "example": "tank/data-clone"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "origin": {"type": "string"},
+        "clone": {"type": "string"}
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/snapshots/{dataset}/{snapshot}/send-size",
+      "tag": "replication",
+      "summary": "Estimate send size",
+      "description": "Estimate the size of a send stream for a snapshot",
+      "auth": true,
+      "params": {
+        "dataset": {"in": "path", "type": "string", "required": true, "description": "Dataset path"},
+        "snapshot": {"in": "path", "type": "string", "required": true, "description": "Snapshot name"},
+        "from": {"in": "query", "type": "string", "description": "Base snapshot for incremental estimate"},
+        "raw": {"in": "query", "type": "boolean", "default": false, "description": "Raw/encrypted estimate"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "snapshot": {"type": "string"},
+        "estimated_bytes": {"type": "integer"},
+        "estimated_human": {"type": "string"},
+        "incremental": {"type": "boolean"},
+        "from_snapshot": {"type": "string", "nullable": true}
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/snapshots/{dataset}/{snapshot}/send",
+      "tag": "replication",
+      "summary": "Send snapshot to file",
+      "description": "Send a snapshot to a file for backup or transfer (async)",
+      "auth": true,
+      "params": {
+        "dataset": {"in": "path", "type": "string", "required": true, "description": "Dataset path"},
+        "snapshot": {"in": "path", "type": "string", "required": true, "description": "Snapshot name"}
+      },
+      "body": {
+        "output_file": {"type": "string", "required": true, "description": "Absolute path to output file"},
+        "from_snapshot": {"type": "string", "description": "Base snapshot for incremental send"},
+        "raw": {"type": "boolean", "default": false, "description": "Raw/encrypted send"},
+        "compressed": {"type": "boolean", "default": false, "description": "Compressed stream"},
+        "dry_run": {"type": "boolean", "default": false, "description": "Only estimate size"},
+        "overwrite": {"type": "boolean", "default": false, "description": "Overwrite output file if exists"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "task_id": {"type": "string"},
+        "message": {"type": "string"}
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/datasets/{path}/receive",
+      "tag": "replication",
+      "summary": "Receive snapshot from file",
+      "description": "Receive a snapshot from a file (CLI-based, async)",
+      "auth": true,
+      "params": {
+        "path": {"in": "path", "type": "string", "required": true, "description": "Target dataset path"}
+      },
+      "body": {
+        "input_file": {"type": "string", "required": true, "description": "Absolute path to input file"},
+        "force": {"type": "boolean", "default": false, "description": "Force receive, rollback target if necessary"},
+        "dry_run": {"type": "boolean", "default": false, "description": "Validate only"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "task_id": {"type": "string"},
+        "message": {"type": "string"}
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/snapshots/{dataset}/{snapshot}/replicate",
+      "tag": "replication",
+      "summary": "Replicate snapshot to another pool",
+      "description": "Replicate a snapshot directly to another pool (hybrid: libzetta send + CLI receive, async)",
+      "auth": true,
+      "params": {
+        "dataset": {"in": "path", "type": "string", "required": true, "description": "Source dataset path"},
+        "snapshot": {"in": "path", "type": "string", "required": true, "description": "Snapshot name"}
+      },
+      "body": {
+        "target_dataset": {"type": "string", "required": true, "description": "Target dataset path on destination pool"},
+        "from_snapshot": {"type": "string", "description": "Base snapshot for incremental replication"},
+        "raw": {"type": "boolean", "default": false, "description": "Raw/encrypted send"},
+        "compressed": {"type": "boolean", "default": false, "description": "Compressed stream"},
+        "force": {"type": "boolean", "default": false, "description": "Force receive"},
+        "dry_run": {"type": "boolean", "default": false, "description": "Only estimate size"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "task_id": {"type": "string"},
+        "message": {"type": "string"}
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/{task_id}",
+      "tag": "tasks",
+      "summary": "Get task status",
+      "description": "Get the status of an async task (send, receive, replicate)",
+      "auth": true,
+      "params": {
+        "task_id": {"in": "path", "type": "string", "required": true, "description": "Task identifier"}
+      },
+      "response": {
+        "status": {"type": "string", "enum": ["pending", "running", "completed", "failed"]},
+        "task_id": {"type": "string"},
+        "operation": {"type": "string", "enum": ["send", "receive", "replicate"]},
+        "started_at": {"type": "integer"},
+        "completed_at": {"type": "integer", "nullable": true},
+        "progress": {
+          "type": "object",
+          "nullable": true,
+          "properties": {
+            "bytes_processed": {"type": "integer"},
+            "bytes_total": {"type": "integer", "nullable": true},
+            "percent": {"type": "number", "nullable": true}
+          }
+        },
+        "error": {"type": "string", "nullable": true}
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/command",
+      "tag": "system",
+      "summary": "Execute command",
+      "description": "Execute an arbitrary shell command (use with caution)",
+      "auth": true,
+      "body": {
+        "command": {"type": "string", "required": true, "description": "Command to execute", "example": "zpool"},
+        "args": {"type": "array", "items": "string", "description": "Command arguments", "example": ["status", "-v"]}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "output": {"type": "string"},
+        "exit_code": {"type": "integer"}
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/safety",
+      "tag": "system",
+      "summary": "Safety lock status",
+      "description": "Check ZFS version approval and lock state",
+      "auth": false,
+      "response": {
+        "status": {"type": "string"},
+        "locked": {"type": "boolean"},
+        "zfs_version": {"type": "string"},
+        "approved_versions": {"type": "array", "items": "string"},
+        "message": {"type": "string"}
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/safety",
+      "tag": "system",
+      "summary": "Safety lock override",
+      "description": "Override lock for untested ZFS versions",
+      "auth": true,
+      "body": {
+        "action": {"type": "string", "required": true, "enum": ["approve", "lock"], "description": "Action to perform"},
+        "version": {"type": "string", "description": "ZFS version to approve (required for approve action)"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "message": {"type": "string"}
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/docs",
+      "tag": "system",
+      "summary": "API documentation",
+      "description": "Swagger UI or JSON API definition",
+      "auth": false,
+      "params": {
+        "format": {"in": "query", "type": "string", "enum": ["json"], "description": "Return JSON API definition instead of Swagger UI"}
+      },
+      "response": {
+        "_note": "Returns HTML (Swagger UI) or this api.json"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/features",
+      "tag": "system",
+      "summary": "List ZFS features",
+      "description": "Returns all ZFS features with their implementation status",
+      "auth": false,
+      "params": {
+        "format": {"in": "query", "type": "string", "enum": ["json"], "description": "Return JSON instead of HTML"}
+      },
+      "response": {
+        "status": {"type": "string"},
+        "version": {"type": "string"},
+        "summary": {
+          "type": "object",
+          "properties": {
+            "total": {"type": "integer"},
+            "implemented": {"type": "integer"},
+            "planned": {"type": "integer"}
+          }
+        },
+        "features": {"type": "array", "items": "object"}
+      }
+    }
+  ]
+}

@@ -57,6 +57,19 @@ extern "C" {
         zhp: *mut zpool_handle_t,
         path: *const std::ffi::c_char,
     ) -> std::ffi::c_int;
+
+    /// Clear device errors in a pool
+    /// ```c
+    /// int zpool_clear(zpool_handle_t *zhp, const char *device, nvlist_t *rewind);
+    /// ```
+    /// - device: Specific device to clear, or NULL to clear all devices
+    /// - rewind: Rewind policy (usually NULL for simple clear)
+    /// - Returns: 0 on success, non-zero on error
+    pub fn zpool_clear(
+        zhp: *mut zpool_handle_t,
+        device: *const std::ffi::c_char,
+        rewind: *mut nvlist_t,
+    ) -> std::ffi::c_int;
 }
 
 // ============================================================================

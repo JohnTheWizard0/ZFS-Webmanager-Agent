@@ -8,8 +8,72 @@ use libzetta::zfs::{SendFlags, ZfsEngine};
 use libzetta_zfs_core_sys::{lzc_send_flags, lzc_send_space};
 use std::ffi::CString;
 use std::fs::OpenOptions;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::ptr;
+
+/// Blocked directory prefixes for file operations (SEC-09)
+/// These are sensitive system directories that should never be accessed
+const BLOCKED_PATHS: &[&str] = &[
+    "/etc",
+    "/root",
+    "/home",
+    "/var",
+    "/usr",
+    "/bin",
+    "/sbin",
+    "/lib",
+    "/boot",
+    "/proc",
+    "/sys",
+    "/dev",
+    "/run",
+];
+
+/// Validate a file path for replication operations (SEC-09)
+/// - Must be absolute
+/// - Must not contain path traversal after canonicalization
+/// - Must not access blocked system directories
+fn validate_file_path(path: &str) -> Result<PathBuf, ZfsError> {
+    // Check absolute path
+    if !path.starts_with('/') {
+        return Err("File path must be absolute (start with /)".to_string());
+    }
+
+    // Get the parent directory and ensure it exists for canonicalization
+    let path_obj = Path::new(path);
+    let parent = path_obj.parent().ok_or("Invalid file path")?;
+
+    // Canonicalize parent to resolve any .. or symlinks
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|e| format!("Invalid path - parent directory error: {}", e))?;
+
+    // Reconstruct the full canonical path
+    let file_name = path_obj
+        .file_name()
+        .ok_or("Invalid file path - no filename")?;
+    let canonical_path = canonical_parent.join(file_name);
+
+    // Convert to string for prefix checking
+    let canonical_str = canonical_path
+        .to_str()
+        .ok_or("Invalid path - not valid UTF-8")?;
+
+    // Check against blocked directories
+    for blocked in BLOCKED_PATHS {
+        if canonical_str.starts_with(blocked)
+            && (canonical_str.len() == blocked.len()
+                || canonical_str.chars().nth(blocked.len()) == Some('/'))
+        {
+            return Err(format!(
+                "Access denied: path '{}' is in a restricted directory",
+                blocked
+            ));
+        }
+    }
+
+    Ok(canonical_path)
+}
 
 impl ZfsManager {
     /// Send a snapshot to a file
@@ -34,11 +98,38 @@ impl ZfsManager {
             return Err(format!("Snapshot '{}' does not exist", snapshot));
         }
 
-        if !output_file.starts_with('/') {
-            return Err("Output file path must be absolute".to_string());
-        }
+        // Validate output path (SEC-09) - for new files, validate parent exists
+        let output_path = if std::path::Path::new(output_file).exists() {
+            validate_file_path(output_file)?
+        } else {
+            // For new files, validate parent directory
+            let parent = std::path::Path::new(output_file)
+                .parent()
+                .ok_or("Invalid output path")?;
+            let canonical_parent = parent
+                .canonicalize()
+                .map_err(|e| format!("Output directory error: {}", e))?;
+            let file_name = std::path::Path::new(output_file)
+                .file_name()
+                .ok_or("Invalid output filename")?;
+            let full_path = canonical_parent.join(file_name);
 
-        let output_path = std::path::Path::new(output_file);
+            // Check blocked paths
+            let path_str = full_path.to_str().ok_or("Invalid path - not valid UTF-8")?;
+            for blocked in BLOCKED_PATHS {
+                if path_str.starts_with(blocked)
+                    && (path_str.len() == blocked.len()
+                        || path_str.chars().nth(blocked.len()) == Some('/'))
+                {
+                    return Err(format!(
+                        "Access denied: path '{}' is in a restricted directory",
+                        blocked
+                    ));
+                }
+            }
+            full_path
+        };
+
         if output_path.exists() && !overwrite {
             return Err(format!(
                 "Output file '{}' already exists. Set overwrite: true to replace.",
@@ -69,8 +160,8 @@ impl ZfsManager {
             .write(true)
             .create(true)
             .truncate(true)
-            .open(output_file)
-            .map_err(|e| format!("Failed to create output file '{}': {}", output_file, e))?;
+            .open(&output_path)
+            .map_err(|e| format!("Failed to create output file '{}': {}", output_path.display(), e))?;
 
         if let Some(from) = from_snapshot {
             let from_path = if from.contains('@') {
@@ -94,35 +185,50 @@ impl ZfsManager {
                 .map_err(|e| format!("libzetta send_full failed: {}", e))?;
         }
 
-        let metadata = std::fs::metadata(output_file)
+        let metadata = std::fs::metadata(&output_path)
             .map_err(|e| format!("Failed to read output file: {}", e))?;
         Ok(metadata.len())
     }
 
     /// Receive a snapshot from a file
+    /// Uses stdin pipe instead of shell to prevent command injection (SEC-02)
     pub async fn receive_snapshot_from_file(
         &self,
         target_dataset: &str,
         input_file: &str,
         force: bool,
     ) -> Result<String, ZfsError> {
-        if !std::path::Path::new(input_file).exists() {
+        use std::fs::File;
+        use std::os::unix::io::{FromRawFd, IntoRawFd};
+
+        // Validate input path (SEC-09)
+        let validated_path = validate_file_path(input_file)?;
+
+        if !validated_path.exists() {
             return Err(format!("Input file '{}' does not exist", input_file));
         }
 
-        let mut args = vec!["receive".to_string()];
+        // Open file handle directly - no shell involved (prevents injection)
+        let file = File::open(&validated_path)
+            .map_err(|e| format!("Failed to open input file '{}': {}", validated_path.display(), e))?;
+
+        let mut cmd = std::process::Command::new("zfs");
+        cmd.arg("receive");
 
         if force {
-            args.push("-F".to_string());
+            cmd.arg("-F");
         }
 
-        args.push("-v".to_string());
-        args.push(target_dataset.to_string());
+        cmd.arg("-v");
+        cmd.arg(target_dataset);
 
-        let cmd_str = format!("zfs {} < '{}'", args.join(" "), input_file);
+        // Pipe file directly to stdin (no shell, no injection risk)
+        let file_fd = file.into_raw_fd();
+        cmd.stdin(unsafe { std::process::Stdio::from_raw_fd(file_fd) });
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
 
-        let output = std::process::Command::new("sh")
-            .args(["-c", &cmd_str])
+        let output = cmd
             .output()
             .map_err(|e| format!("Failed to execute zfs receive: {}", e))?;
 

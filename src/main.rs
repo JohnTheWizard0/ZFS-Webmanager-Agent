@@ -9,10 +9,10 @@ mod zfs_management;
 use auth::*;
 use handlers::*;
 use models::{
-    AddVdevRequest, CloneSnapshotRequest, CommandRequest, CreateDataset, CreatePool,
-    CreateSnapshot, DeleteDatasetQuery, ExportPoolRequest, ImportPoolRequest, LastAction,
-    ReceiveSnapshotRequest, ReplicateSnapshotRequest, RollbackRequest, SafetyOverrideRequest,
-    SendSizeQuery, SendSnapshotRequest, SetPropertyRequest,
+    AddVdevRequest, ClearPoolRequest, CloneSnapshotRequest, CommandRequest, CreateDataset,
+    CreatePool, CreateSnapshot, DeleteDatasetQuery, ExportPoolRequest, ImportPoolRequest,
+    LastAction, ReceiveSnapshotRequest, ReplicateSnapshotRequest, RollbackRequest,
+    SafetyOverrideRequest, SendSizeQuery, SendSnapshotRequest, SetPropertyRequest,
 };
 use safety::SafetyManager;
 use std::collections::HashMap;
@@ -91,9 +91,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Safety: ZFS version approved, all operations permitted");
     }
 
-    // Generate or read API key
+    // Load API key from credentials directory (never printed to console - SEC-03)
     let api_key = get_or_create_api_key()?;
-    println!("\nAPI Key: {}", api_key);
 
     // Initialize ZFS manager
     let zfs = ZfsManager::new()?;
@@ -131,15 +130,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // OpenAPI docs routes (no auth required)
-    // GET /v1/docs - Swagger UI
-    // GET /v1/openapi.yaml - OpenAPI spec
+    // GET /v1/docs - Swagger UI (or ?format=json for lean API spec)
+    // GET /v1/openapi.json - OpenAPI spec (generated from api.json)
     let docs_route = warp::get()
         .and(warp::path("docs"))
         .and(warp::path::end())
-        .and_then(docs_handler);
+        .and(warp::query::<HashMap<String, String>>())
+        .and_then(|query: HashMap<String, String>| {
+            let format = query.get("format").cloned();
+            docs_handler(format)
+        });
 
     let openapi_route = warp::get()
-        .and(warp::path("openapi.yaml"))
+        .and(warp::path("openapi.json"))
         .and(warp::path::end())
         .and_then(openapi_handler);
 
@@ -155,9 +158,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             zfs_features_handler(format)
         });
 
-    // Safety routes (no auth required - must be accessible when locked)
-    // GET /v1/safety - Get safety status
-    // POST /v1/safety - Override safety lock
+    // Safety routes
+    // GET /v1/safety - Get safety status (no auth - must be accessible when locked)
+    // POST /v1/safety - Override safety lock (requires auth - SEC-05)
     let safety_routes = {
         let get_status = warp::get()
             .and(warp::path("safety"))
@@ -170,7 +173,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and(warp::path::end())
             .and(warp::body::json())
             .and(with_safety.clone())
-            .and_then(|body: SafetyOverrideRequest, sm: SafetyManager| {
+            .and(api_key_check.clone()) // SEC-05: Require auth for safety override
+            .and_then(|body: SafetyOverrideRequest, sm: SafetyManager, _| {
                 safety_override_handler(body, sm)
             });
 
@@ -357,6 +361,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 },
             );
 
+        // POST /pools/{name}/clear - clear pool errors
+        let clear_pool = warp::post()
+            .and(warp::path("pools"))
+            .and(warp::path::param())
+            .and(warp::path("clear"))
+            .and(warp::path::end())
+            .and(safety_filter.clone())
+            .and(warp::body::json())
+            .and(with_action_tracking("clear_pool", last_action.clone()))
+            .and(zfs.clone())
+            .and(api_key_check.clone())
+            .and_then(|name: String, body: ClearPoolRequest, zfs: ZfsManager, _| {
+                clear_pool_handler(name, body, zfs)
+            });
+
         // IMPORTANT: Route order matters for warp path matching!
         // - list_importable (GET /pools/importable) MUST come BEFORE status (GET /pools/{param})
         // - import_pool (POST /pools/import) MUST come BEFORE create (POST /pools + body)
@@ -372,6 +391,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .or(export_pool)
             .or(add_vdev)
             .or(remove_vdev)
+            .or(clear_pool)
     };
 
     // Snapshot routes
@@ -755,7 +775,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "replication",
                 "health",
                 "docs",
-                "openapi.yaml",
+                "openapi.json",
                 "features",
                 "safety",
             ];

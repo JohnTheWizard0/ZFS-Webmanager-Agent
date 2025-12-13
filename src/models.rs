@@ -574,6 +574,26 @@ pub struct RemoveVdevResponse {
     pub message: String,
 }
 
+/// Request to clear pool errors
+/// POST /v1/pools/{name}/clear
+#[derive(Debug, Deserialize)]
+pub struct ClearPoolRequest {
+    /// Specific device to clear errors for (optional)
+    /// If omitted, clears all devices in the pool
+    #[serde(default)]
+    pub device: Option<String>,
+}
+
+/// Response after successfully clearing pool errors
+#[derive(Debug, Serialize)]
+pub struct ClearPoolResponse {
+    pub status: String,
+    pub pool: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    pub message: String,
+}
+
 /// Response for send size estimation
 #[derive(Debug, Serialize)]
 pub struct SendSizeResponse {
