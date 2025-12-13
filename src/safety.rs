@@ -16,7 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::models::{SafetyState, ZfsVersionInfo};
 
 /// Settings loaded from settings.json
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Settings {
     pub safety: SafetySettings,
 }
@@ -37,31 +37,31 @@ impl Default for SafetySettings {
     }
 }
 
-impl Default for Settings {
-    fn default() -> Self {
-        Settings {
-            safety: SafetySettings::default(),
-        }
-    }
-}
-
 /// Load settings from settings.json or use defaults
+/// Looks for settings.json in the same directory as the executable
 pub fn load_settings() -> Settings {
-    let settings_path = "settings.json";
+    let settings_path = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("settings.json")))
+        .unwrap_or_else(|| std::path::PathBuf::from("settings.json"));
 
-    match fs::read_to_string(settings_path) {
+    match fs::read_to_string(&settings_path) {
         Ok(content) => match serde_json::from_str(&content) {
             Ok(settings) => settings,
             Err(e) => {
                 eprintln!(
-                    "Warning: Failed to parse settings.json: {}. Using defaults.",
+                    "Warning: Failed to parse {}: {}. Using defaults.",
+                    settings_path.display(),
                     e
                 );
                 Settings::default()
             }
         },
         Err(_) => {
-            eprintln!("Note: settings.json not found, using default values.");
+            eprintln!(
+                "Note: {} not found, using default values.",
+                settings_path.display()
+            );
             Settings::default()
         }
     }

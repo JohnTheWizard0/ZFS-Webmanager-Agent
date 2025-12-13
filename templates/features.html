@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ZFSreload Agent - Feature Coverage</title>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,{{FAVICON}}">
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            /* Light theme (default) - Platinum & Burgundy */
+            --bg-primary: #FDFCFB;
+            --bg-secondary: #F5F3F0;
+            --bg-card: #FFFFFF;
+            --bg-header: linear-gradient(135deg, #FDFCFB 0%, #E2E0DD 100%);
+            --text-primary: #2D1F24;
+            --text-secondary: #5C4A50;
+            --burgundy-start: #6B1A30;
+            --burgundy-end: #3D0E1A;
+            --accent-burgundy: #6B1A30;
+            --accent-green: #2D8659;
+            --accent-blue: #4A6FA5;
+            --accent-purple: #7B4B94;
+            --accent-orange: #C4652A;
+            --accent-yellow: #B8860B;
+            --accent-gray: #8B7D82;
+            --border-light: #E2E0DD;
+            --shadow: 0 4px 12px rgba(61, 14, 26, 0.08);
+            --shadow-hover: 0 8px 24px rgba(61, 14, 26, 0.12);
+            --logo-bg: url(#gradLight);
+            --logo-stroke: #3D0E1A;
+            --logo-text: #6B1A30;
+        }
+
+        /* Dark theme - Burgundy & Platinum (reversed) */
+        [data-theme="dark"] {
+            --bg-primary: #1a0a10;
+            --bg-secondary: #2d1520;
+            --bg-card: #3D1E2A;
+            --bg-header: linear-gradient(135deg, #6B1A30 0%, #3D0E1A 100%);
+            --text-primary: #FDFCFB;
+            --text-secondary: #C9C4C6;
+            --accent-burgundy: #E2E0DD;
+            --accent-green: #5CD99A;
+            --accent-blue: #7BA3D9;
+            --accent-purple: #B388CC;
+            --accent-orange: #E89860;
+            --accent-yellow: #D4A84B;
+            --accent-gray: #A99DA1;
+            --border-light: #5C3A48;
+            --shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            --shadow-hover: 0 8px 24px rgba(0, 0, 0, 0.4);
+            --logo-bg: url(#gradDark);
+            --logo-stroke: #FDFCFB;
+            --logo-text: #E2E0DD;
+        }
+
+        /* Auto dark mode based on system preference */
+        @media (prefers-color-scheme: dark) {
+            :root:not([data-theme="light"]) {
+                --bg-primary: #1a0a10;
+                --bg-secondary: #2d1520;
+                --bg-card: #3D1E2A;
+                --bg-header: linear-gradient(135deg, #6B1A30 0%, #3D0E1A 100%);
+                --text-primary: #FDFCFB;
+                --text-secondary: #C9C4C6;
+                --accent-burgundy: #E2E0DD;
+                --accent-green: #5CD99A;
+                --accent-blue: #7BA3D9;
+                --accent-purple: #B388CC;
+                --accent-orange: #E89860;
+                --accent-yellow: #D4A84B;
+                --accent-gray: #A99DA1;
+                --border-light: #5C3A48;
+                --shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+                --shadow-hover: 0 8px 24px rgba(0, 0, 0, 0.4);
+                --logo-bg: url(#gradDark);
+                --logo-stroke: #FDFCFB;
+                --logo-text: #E2E0DD;
+            }
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+            min-height: 100vh;
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        header {
+            text-align: center;
+            margin-bottom: 3rem;
+            padding: 2.5rem;
+            background: var(--bg-header);
+            border-radius: 20px;
+            border: 1px solid var(--border-light);
+            box-shadow: var(--shadow);
+            position: relative;
+        }
+        .theme-toggle {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border-light);
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            transition: all 0.2s ease;
+            box-shadow: var(--shadow);
+        }
+        .theme-toggle:hover {
+            transform: scale(1.1);
+        }
+        .logo-title {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1rem;
+            margin-bottom: 0.5rem;
+        }
+        .logo {
+            width: 56px;
+            height: 56px;
+            filter: drop-shadow(0 2px 4px rgba(61, 14, 26, 0.15));
+        }
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--burgundy-start), var(--burgundy-end));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        [data-theme="dark"] h1 {
+            background: linear-gradient(135deg, #FDFCFB, #E2E0DD);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root:not([data-theme="light"]) h1 {
+                background: linear-gradient(135deg, #FDFCFB, #E2E0DD);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                background-clip: text;
+            }
+        }
+        .subtitle {
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+            font-weight: 400;
+        }
+        .summary {
+            display: flex;
+            justify-content: center;
+            gap: 1.5rem;
+            margin-top: 2rem;
+            flex-wrap: wrap;
+        }
+        .stat {
+            background: var(--bg-card);
+            padding: 1.25rem 2rem;
+            border-radius: 16px;
+            text-align: center;
+            border: 1px solid var(--border-light);
+            box-shadow: var(--shadow);
+            min-width: 140px;
+            transition: all 0.2s ease;
+        }
+        .stat-value {
+            font-size: 2.25rem;
+            font-weight: 700;
+            color: var(--accent-burgundy);
+        }
+        .stat-value.green { color: var(--accent-green); }
+        .stat-value.orange { color: var(--accent-orange); }
+        .stat-label {
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-top: 0.25rem;
+        }
+        .category {
+            margin-bottom: 2rem;
+        }
+        .category-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+            padding: 0.875rem 1.25rem;
+            background: var(--bg-card);
+            border-radius: 12px;
+            border: 1px solid var(--border-light);
+            box-shadow: var(--shadow);
+            transition: all 0.2s ease;
+        }
+        .category-icon {
+            font-size: 1.5rem;
+        }
+        .category-name {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        .category-count {
+            margin-left: auto;
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 1rem;
+        }
+        .feature-card {
+            background: var(--bg-card);
+            border-radius: 12px;
+            padding: 1.25rem;
+            border: 1px solid var(--border-light);
+            transition: all 0.2s ease;
+            box-shadow: 0 2px 6px rgba(61, 14, 26, 0.04);
+        }
+        .feature-card:hover {
+            border-color: var(--accent-burgundy);
+            box-shadow: var(--shadow-hover);
+            transform: translateY(-2px);
+        }
+        .feature-card.implemented {
+            border-left: 4px solid var(--accent-green);
+        }
+        .feature-card.planned {
+            border-left: 4px solid var(--accent-gray);
+            opacity: 0.75;
+        }
+        .feature-header {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+        }
+        .status-icon {
+            width: 22px;
+            height: 22px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .implemented .status-icon {
+            background: var(--accent-green);
+            color: white;
+        }
+        .planned .status-icon {
+            background: var(--accent-gray);
+            color: white;
+        }
+        .feature-name {
+            font-weight: 600;
+            flex: 1;
+            color: var(--text-primary);
+        }
+        .impl-badge {
+            font-size: 0.65rem;
+            padding: 0.25rem 0.6rem;
+            border-radius: 6px;
+            text-transform: uppercase;
+            font-weight: 700;
+            letter-spacing: 0.03em;
+        }
+        .impl-badge.libzetta { background: var(--accent-blue); color: white; }
+        .impl-badge.ffi { background: var(--accent-purple); color: white; }
+        .impl-badge.libzfs { background: var(--accent-orange); color: white; }
+        .impl-badge.cli { background: var(--accent-yellow); color: white; }
+        .impl-badge.hybrid { background: linear-gradient(90deg, var(--accent-blue), var(--accent-orange)); color: white; }
+        .impl-badge.planned { background: var(--accent-gray); color: white; }
+        .endpoint {
+            margin-top: 0.75rem;
+        }
+        .endpoint code {
+            font-size: 0.8rem;
+            background: var(--bg-secondary);
+            padding: 0.3rem 0.6rem;
+            border-radius: 6px;
+            color: var(--accent-burgundy);
+            font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+            border: 1px solid var(--border-light);
+        }
+        .notes {
+            margin-top: 0.5rem;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+        .legend {
+            display: flex;
+            justify-content: center;
+            gap: 1.25rem;
+            margin-top: 2rem;
+            flex-wrap: wrap;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+        .links {
+            margin-top: 2.5rem;
+            text-align: center;
+            padding: 1.5rem;
+            background: var(--bg-card);
+            border-radius: 12px;
+            border: 1px solid var(--border-light);
+            box-shadow: var(--shadow);
+            transition: all 0.2s ease;
+        }
+        .links a {
+            color: var(--accent-burgundy);
+            text-decoration: none;
+            margin: 0 1rem;
+            font-weight: 500;
+            transition: color 0.2s ease;
+        }
+        .links a:hover {
+            text-decoration: underline;
+        }
+        footer {
+            text-align: center;
+            margin-top: 2rem;
+            padding: 1rem;
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+        }
+        footer a {
+            color: var(--accent-burgundy);
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode">
+                <span class="theme-icon">&#9790;</span>
+            </button>
+            <div class="logo-title">
+                <svg class="logo" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <linearGradient id="gradLight" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" style="stop-color:#FDFCFB;stop-opacity:1" />
+                            <stop offset="100%" style="stop-color:#E2E0DD;stop-opacity:1" />
+                        </linearGradient>
+                        <linearGradient id="gradDark" x1="0%" y1="0%" x2="0%" y2="100%">
+                            <stop offset="0%" style="stop-color:#6B1A30;stop-opacity:1" />
+                            <stop offset="100%" style="stop-color:#3D0E1A;stop-opacity:1" />
+                        </linearGradient>
+                        <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+                            <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#3D0E1A" flood-opacity="0.15"/>
+                        </filter>
+                    </defs>
+                    <g filter="url(#shadow)">
+                        <rect class="logo-rect" x="32" y="32" width="448" height="448" rx="100" ry="100" fill="url(#gradLight)" />
+                    </g>
+                    <path class="logo-z" d="M170 170.5 H 340 L 170 317.5 H 340" stroke="#3D0E1A" stroke-width="38" fill="none" stroke-linecap="butt" stroke-linejoin="miter" />
+                    <text class="logo-r" x="344" y="336" font-family="'Montserrat', sans-serif" font-size="200" font-weight="bold" fill="#6B1A30" opacity="1">r</text>
+                </svg>
+                <h1>ZFSreload Agent API</h1>
+            </div>
+            <p class="subtitle">Feature Coverage &amp; Implementation Status</p>
+            <div class="summary">
+                <div class="stat">
+                    <div class="stat-value">{{TOTAL}}</div>
+                    <div class="stat-label">Total Features</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">{{IMPLEMENTED}}</div>
+                    <div class="stat-label">Implemented</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value orange">{{PLANNED}}</div>
+                    <div class="stat-label">Planned</div>
+                </div>
+            </div>
+            <div class="legend">
+                <div class="legend-item"><span class="impl-badge libzetta">libzetta</span> Library bindings</div>
+                <div class="legend-item"><span class="impl-badge ffi">FFI</span> Direct lzc_* calls</div>
+                <div class="legend-item"><span class="impl-badge libzfs">libzfs</span> libzfs FFI</div>
+                <div class="legend-item"><span class="impl-badge hybrid">Hybrid</span> libzetta + CLI</div>
+                <div class="legend-item"><span class="impl-badge cli">CLI</span> Experimental</div>
+            </div>
+        </header>
+
+        {{FEATURES}}
+
+        <div class="links">
+            <a href="/v1/docs">API Documentation</a>
+            <a href="/v1/features?format=json">JSON Format</a>
+            <a href="/v1/health">Health Check</a>
+        </div>
+
+        <footer>
+            ZFSreload Agent v{{VERSION}}
+        </footer>
+    </div>
+
+    <script>
+        function getPreferredTheme() {
+            const saved = localStorage.getItem('theme');
+            if (saved) return saved;
+            return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
+
+        function setTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+            localStorage.setItem('theme', theme);
+            updateLogo(theme);
+            updateIcon(theme);
+        }
+
+        function updateLogo(theme) {
+            const rect = document.querySelector('.logo-rect');
+            const z = document.querySelector('.logo-z');
+            const r = document.querySelector('.logo-r');
+            if (theme === 'dark') {
+                rect.setAttribute('fill', 'url(#gradDark)');
+                z.setAttribute('stroke', '#FDFCFB');
+                r.setAttribute('fill', '#E2E0DD');
+            } else {
+                rect.setAttribute('fill', 'url(#gradLight)');
+                z.setAttribute('stroke', '#3D0E1A');
+                r.setAttribute('fill', '#6B1A30');
+            }
+        }
+
+        function updateIcon(theme) {
+            const icon = document.querySelector('.theme-icon');
+            icon.innerHTML = theme === 'dark' ? '&#9728;' : '&#9790;';
+        }
+
+        function toggleTheme() {
+            const current = document.documentElement.getAttribute('data-theme') || getPreferredTheme();
+            setTheme(current === 'dark' ? 'light' : 'dark');
+        }
+
+        // Initialize theme
+        setTheme(getPreferredTheme());
+    </script>
+</body>
+</html>

@@ -1,0 +1,27 @@
+
+            <svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" data-zfsr-state="%7B%22shape%22%3A%22rounded%22%2C%22theme%22%3A%22light%22%2C%22zStroke%22%3A38%2C%22zHeightScale%22%3A0.98%2C%22zOffsetY%22%3A29%2C%22zCap%22%3A%22butt%22%2C%22rx%22%3A344%2C%22ry%22%3A336%2C%22rSize%22%3A200%2C%22rFont%22%3A%22'Montserrat'%2C%20sans-serif%22%2C%22colors%22%3A%7B%22burgundyStart%22%3A%22%236B1A30%22%2C%22burgundyEnd%22%3A%22%233D0E1A%22%2C%22platinumStart%22%3A%22%23FDFCFB%22%2C%22platinumEnd%22%3A%22%23E2E0DD%22%7D%7D">
+                
+            <defs>
+                <linearGradient id="gradDark" x1="0%" y1="0%" x2="0%" y2="100%">
+                    <stop offset="0%" style="stop-color:#6B1A30;stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:#3D0E1A;stop-opacity:1" />
+                </linearGradient>
+                <linearGradient id="gradLight" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" style="stop-color:#FDFCFB;stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:#E2E0DD;stop-opacity:1" />
+                </linearGradient>
+                <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+                    <feDropShadow dx="0" dy="8" stdDeviation="6" flood-color="#000000" flood-opacity="0.2"/>
+                </filter>
+            </defs>
+                <g filter="url(#shadow)">
+                    <rect x="32" y="32" width="448" height="448" rx="100" ry="100" fill="url(#gradLight)" />
+                </g>
+                <path d="M170 170.5 H 340 L 170 317.5 H 340" 
+                          stroke="#3D0E1A" stroke-width="38" 
+                          fill="none" stroke-linecap="butt" stroke-linejoin="miter" />
+                <text x="344" y="336" 
+                          font-family="'Montserrat', sans-serif" 
+                          font-size="200" font-weight="bold" 
+                          fill="#6B1A30" opacity="1">r</text>
+            </svg>

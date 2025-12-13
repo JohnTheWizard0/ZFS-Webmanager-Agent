@@ -268,6 +268,7 @@ pub struct ZfsFeatureInfo {
 /// JSON file structure for features
 #[derive(Debug, Deserialize)]
 pub struct FeaturesFile {
+    #[allow(dead_code)] // Reserved for future version compatibility checks
     pub version: String,
     pub features: Vec<ZfsFeatureInfo>,
 }

@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ZFSreload API Documentation</title>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,{{FAVICON}}">
+    <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        html { box-sizing: border-box; overflow: -moz-scrollbars-vertical; overflow-y: scroll; }
+        *, *:before, *:after { box-sizing: inherit; }
+
+        /* Light theme (default) */
+        body {
+            margin: 0;
+            background: #FDFCFB;
+            transition: background-color 0.3s ease;
+        }
+
+        /* Dark theme */
+        [data-theme="dark"] body {
+            background: #1a0a10;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root:not([data-theme="light"]) body {
+                background: #1a0a10;
+            }
+        }
+
+        /* Theme toggle button - inside topbar */
+        .swagger-ui .topbar {
+            background: linear-gradient(135deg, #6B1A30 0%, #3D0E1A 100%);
+            padding: 8px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .swagger-ui .topbar-wrapper {
+            flex: 1;
+        }
+        .theme-toggle {
+            background: rgba(255,255,255,0.15);
+            border: 1px solid rgba(255,255,255,0.25);
+            border-radius: 50%;
+            width: 36px;
+            height: 36px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+            transition: all 0.2s ease;
+            color: #FDFCFB;
+            margin-left: 16px;
+            flex-shrink: 0;
+        }
+        .theme-toggle:hover {
+            background: rgba(255,255,255,0.25);
+            transform: scale(1.1);
+        }
+
+        /* ZFSreload theme overrides - Light mode */
+        .swagger-ui .info .title {
+            font-family: 'Montserrat', sans-serif;
+            color: #3D0E1A;
+        }
+        .swagger-ui .btn.execute { background: #6B1A30; border-color: #6B1A30; }
+        .swagger-ui .btn.execute:hover { background: #3D0E1A; }
+        .swagger-ui .opblock.opblock-get .opblock-summary-method { background: #4A6FA5; }
+        .swagger-ui .opblock.opblock-post .opblock-summary-method { background: #2D8659; }
+        .swagger-ui .opblock.opblock-delete .opblock-summary-method { background: #6B1A30; }
+        .swagger-ui .opblock.opblock-put .opblock-summary-method { background: #C4652A; }
+
+        /* Dark mode overrides */
+        [data-theme="dark"] .swagger-ui .scheme-container,
+        [data-theme="dark"] .swagger-ui .opblock .opblock-section-header {
+            background: #2d1520;
+        }
+        [data-theme="dark"] .swagger-ui .info .title {
+            color: #FDFCFB;
+        }
+        [data-theme="dark"] .swagger-ui .info p,
+        [data-theme="dark"] .swagger-ui .info li,
+        [data-theme="dark"] .swagger-ui .info a,
+        [data-theme="dark"] .swagger-ui .opblock .opblock-summary-description,
+        [data-theme="dark"] .swagger-ui .opblock-description-wrapper p,
+        [data-theme="dark"] .swagger-ui .opblock .opblock-section-header h4,
+        [data-theme="dark"] .swagger-ui .opblock-tag,
+        [data-theme="dark"] .swagger-ui table thead tr th,
+        [data-theme="dark"] .swagger-ui table tbody tr td,
+        [data-theme="dark"] .swagger-ui .parameter__name,
+        [data-theme="dark"] .swagger-ui .parameter__type,
+        [data-theme="dark"] .swagger-ui .parameter__in,
+        [data-theme="dark"] .swagger-ui .response-col_status,
+        [data-theme="dark"] .swagger-ui .response-col_description,
+        [data-theme="dark"] .swagger-ui label,
+        [data-theme="dark"] .swagger-ui .model-title,
+        [data-theme="dark"] .swagger-ui .model {
+            color: #FDFCFB !important;
+        }
+        [data-theme="dark"] .swagger-ui .opblock-body pre.microlight,
+        [data-theme="dark"] .swagger-ui .highlight-code {
+            background: #2d1520 !important;
+        }
+        [data-theme="dark"] .swagger-ui section.models {
+            background: #2d1520;
+            border-color: #5C3A48;
+        }
+        [data-theme="dark"] .swagger-ui section.models h4 {
+            color: #FDFCFB;
+        }
+        [data-theme="dark"] .swagger-ui .model-container,
+        [data-theme="dark"] .swagger-ui .opblock-body {
+            background: #3D1E2A;
+        }
+        [data-theme="dark"] .swagger-ui .opblock {
+            background: rgba(61, 30, 42, 0.5);
+            border-color: #5C3A48;
+        }
+        [data-theme="dark"] .swagger-ui input[type=text],
+        [data-theme="dark"] .swagger-ui textarea {
+            background: #2d1520;
+            color: #FDFCFB;
+            border-color: #5C3A48;
+        }
+        [data-theme="dark"] .swagger-ui select {
+            background: #2d1520;
+            color: #FDFCFB;
+            border-color: #5C3A48;
+        }
+        [data-theme="dark"] .swagger-ui .btn {
+            color: #FDFCFB;
+        }
+        [data-theme="dark"] .swagger-ui .btn.cancel {
+            background: #5C3A48;
+            border-color: #5C3A48;
+        }
+
+        /* Auto dark mode via media query */
+        @media (prefers-color-scheme: dark) {
+            :root:not([data-theme="light"]) .swagger-ui .scheme-container,
+            :root:not([data-theme="light"]) .swagger-ui .opblock .opblock-section-header {
+                background: #2d1520;
+            }
+            :root:not([data-theme="light"]) .swagger-ui .info .title {
+                color: #FDFCFB;
+            }
+            :root:not([data-theme="light"]) .swagger-ui .info p,
+            :root:not([data-theme="light"]) .swagger-ui .info li,
+            :root:not([data-theme="light"]) .swagger-ui .opblock .opblock-summary-description,
+            :root:not([data-theme="light"]) .swagger-ui .opblock .opblock-section-header h4,
+            :root:not([data-theme="light"]) .swagger-ui .opblock-tag,
+            :root:not([data-theme="light"]) .swagger-ui table thead tr th,
+            :root:not([data-theme="light"]) .swagger-ui .parameter__name,
+            :root:not([data-theme="light"]) .swagger-ui .parameter__type,
+            :root:not([data-theme="light"]) .swagger-ui label {
+                color: #FDFCFB !important;
+            }
+            :root:not([data-theme="light"]) .swagger-ui .opblock-body pre.microlight {
+                background: #2d1520 !important;
+            }
+            :root:not([data-theme="light"]) .swagger-ui section.models {
+                background: #2d1520;
+                border-color: #5C3A48;
+            }
+            :root:not([data-theme="light"]) .swagger-ui .model-container,
+            :root:not([data-theme="light"]) .swagger-ui .opblock-body {
+                background: #3D1E2A;
+            }
+            :root:not([data-theme="light"]) .swagger-ui .opblock {
+                background: rgba(61, 30, 42, 0.5);
+                border-color: #5C3A48;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="swagger-ui"></div>
+    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js" charset="UTF-8"></script>
+    <script>
+        function getPreferredTheme() {
+            const saved = localStorage.getItem('theme');
+            if (saved) return saved;
+            return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
+
+        function setTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+            localStorage.setItem('theme', theme);
+            updateIcon(theme);
+        }
+
+        function updateIcon(theme) {
+            const icon = document.querySelector('.theme-icon');
+            if (icon) {
+                icon.innerHTML = theme === 'dark' ? '&#9728;' : '&#9790;';
+            }
+        }
+
+        function toggleTheme() {
+            const current = document.documentElement.getAttribute('data-theme') || getPreferredTheme();
+            setTheme(current === 'dark' ? 'light' : 'dark');
+        }
+
+        // Initialize theme
+        setTheme(getPreferredTheme());
+
+        window.onload = function() {
+            window.ui = SwaggerUIBundle({
+                url: "/v1/openapi.yaml",
+                dom_id: '#swagger-ui',
+                deepLinking: true,
+                presets: [
+                    SwaggerUIBundle.presets.apis
+                ],
+                onComplete: function() {
+                    // Inject theme toggle button into topbar
+                    const topbar = document.querySelector('.swagger-ui .topbar');
+                    if (topbar) {
+                        const btn = document.createElement('button');
+                        btn.className = 'theme-toggle';
+                        btn.onclick = toggleTheme;
+                        btn.title = 'Toggle dark/light mode';
+                        const currentTheme = document.documentElement.getAttribute('data-theme') || getPreferredTheme();
+                        btn.innerHTML = '<span class="theme-icon">' + (currentTheme === 'dark' ? '&#9728;' : '&#9790;') + '</span>';
+                        topbar.appendChild(btn);
+                    }
+                }
+            });
+        };
+    </script>
+</body>
+</html>
