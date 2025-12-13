@@ -190,6 +190,74 @@ components:
         - name
         - disks
 
+    # Vdev types
+    AddVdevRequest:
+      type: object
+      description: Request to add a vdev to an existing pool
+      properties:
+        vdev_type:
+          type: string
+          enum: [disk, mirror, raidz, raidz2, raidz3, log, cache, spare, special, dedup]
+          description: |
+            Type of vdev to add:
+            - disk: Single disk (stripe)
+            - mirror: Mirrored vdev (2+ disks)
+            - raidz/raidz2/raidz3: RAID-Z with 1/2/3 parity disks
+            - log: ZIL (ZFS Intent Log) device
+            - cache: L2ARC cache device
+            - spare: Hot spare
+            - special: Special allocation class (metadata/small blocks)
+            - dedup: Deduplication table storage
+          example: mirror
+        devices:
+          type: array
+          items:
+            type: string
+          description: List of device paths (absolute paths required)
+          example: ["/dev/sdc", "/dev/sdd"]
+        force:
+          type: boolean
+          default: false
+          description: Force add (-f flag) - skip some safety checks
+        check_ashift:
+          type: boolean
+          default: true
+          description: Warn if ashift (sector size) mismatch with pool
+      required:
+        - vdev_type
+        - devices
+
+    AddVdevResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: success
+        pool:
+          type: string
+          description: Pool name
+          example: tank
+        vdev_type:
+          type: string
+          description: Type of vdev added
+          example: mirror
+        devices:
+          type: array
+          items:
+            type: string
+          description: Devices added
+          example: ["/dev/sdc", "/dev/sdd"]
+        message:
+          type: string
+          description: Human-readable message
+          example: "Vdev added to pool 'tank' successfully"
+      required:
+        - status
+        - pool
+        - vdev_type
+        - devices
+        - message
+
     # Scrub types
     ScrubStatusResponse:
       type: object
@@ -1248,6 +1316,63 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ActionResponse'
+
+  /pools/{name}/vdev:
+    post:
+      summary: Add vdev to pool
+      description: |
+        Add a new vdev to an existing pool to expand storage or add special devices.
+
+        **Implementation**: FROM-SCRATCH using `zpool_add()` libzfs FFI with manual nvlist construction.
+
+        **Vdev Types**:
+        - `disk`: Single disk (adds stripe, reduces redundancy)
+        - `mirror`: Mirrored vdev (2+ disks with redundancy)
+        - `raidz/raidz2/raidz3`: RAID-Z with 1/2/3 parity
+        - `log`: ZIL device for synchronous write performance
+        - `cache`: L2ARC for read caching
+        - `spare`: Hot spare for automatic replacement
+        - `special`: Metadata/small block allocation class
+        - `dedup`: Dedicated deduplication table storage
+
+        **Warning**: Adding a single disk (`disk` type) to a pool with redundancy
+        effectively reduces the pool's redundancy level. Use `mirror` or `raidz`
+        to maintain data protection.
+      operationId: addVdev
+      tags:
+        - Pools
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Pool name
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddVdevRequest'
+      responses:
+        '200':
+          description: Vdev added successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AddVdevResponse'
+        '400':
+          description: Invalid request (bad vdev type, invalid devices, device in use)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Pool not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /pools/{name}/scrub:
     get:

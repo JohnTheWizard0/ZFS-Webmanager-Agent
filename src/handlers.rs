@@ -1,4 +1,5 @@
 use crate::models::*;
+use crate::safety::SafetyManager;
 use crate::task_manager::TaskManager;
 use crate::utils::{
     error_response, success_response, validate_dataset_name, validate_snapshot_name,
@@ -444,6 +445,61 @@ fn build_features_html(data: &ZfsFeaturesResponse) -> String {
         data.summary.total, data.summary.implemented, data.summary.planned, features_html
     )
 }
+
+// ============================================================================
+// Safety Lock Handlers
+// ============================================================================
+
+/// GET /v1/safety - Get safety status
+/// Always accessible (no auth, works even when locked)
+pub async fn safety_status_handler(
+    safety_manager: SafetyManager,
+) -> Result<impl Reply, Rejection> {
+    let state = safety_manager.get_state();
+
+    Ok(warp::reply::json(&SafetyStatusResponse {
+        status: "success".to_string(),
+        locked: state.locked,
+        compatible: state.compatible,
+        zfs_version: state.zfs_version,
+        agent_version: state.agent_version,
+        approved_versions: state.approved_versions,
+        lock_reason: state.lock_reason,
+        override_at: state.override_at,
+    }))
+}
+
+/// POST /v1/safety - Override safety lock
+/// Always accessible (no auth, works even when locked)
+pub async fn safety_override_handler(
+    body: SafetyOverrideRequest,
+    safety_manager: SafetyManager,
+) -> Result<impl Reply, Rejection> {
+    if body.action != "override" {
+        return Ok(warp::reply::json(&SafetyOverrideResponse {
+            status: "error".to_string(),
+            message: format!("Unknown action '{}'. Use 'override'.", body.action),
+            locked: safety_manager.is_locked(),
+        }));
+    }
+
+    match safety_manager.override_lock() {
+        Ok(_) => Ok(warp::reply::json(&SafetyOverrideResponse {
+            status: "success".to_string(),
+            message: "Safety lock disabled. All operations now permitted.".to_string(),
+            locked: false,
+        })),
+        Err(e) => Ok(warp::reply::json(&SafetyOverrideResponse {
+            status: "error".to_string(),
+            message: e,
+            locked: safety_manager.is_locked(),
+        })),
+    }
+}
+
+// ============================================================================
+// Pool Handlers
+// ============================================================================
 
 pub async fn list_pools_handler(zfs: ZfsManager) -> Result<impl Reply, Rejection> {
     match zfs.list_pools().await {
@@ -921,6 +977,41 @@ pub async fn rollback_dataset_handler(
         Err(RollbackError::ZfsError(msg)) => {
             Ok(error_response(&format!("Rollback failed: {}", msg)))
         }
+    }
+}
+
+// =========================================================================
+// Pool Vdev Operations
+// =========================================================================
+
+/// Add a vdev to an existing pool
+/// POST /v1/pools/{name}/vdev
+///
+/// Implementation via libzfs FFI (zpool_add)
+/// Supports: disk, mirror, raidz/2/3, log, cache, spare, special, dedup
+pub async fn add_vdev_handler(
+    pool: String,
+    body: AddVdevRequest,
+    zfs: ZfsManager,
+) -> Result<impl Reply, Rejection> {
+    match zfs
+        .add_vdev(
+            &pool,
+            &body.vdev_type,
+            body.devices.clone(),
+            body.force,
+            body.check_ashift,
+        )
+        .await
+    {
+        Ok(_) => Ok(success_response(AddVdevResponse {
+            status: "success".to_string(),
+            pool: pool.clone(),
+            vdev_type: body.vdev_type,
+            devices: body.devices,
+            message: format!("Vdev added to pool '{}' successfully", pool),
+        })),
+        Err(e) => Ok(error_response(&format!("Failed to add vdev: {}", e))),
     }
 }
 

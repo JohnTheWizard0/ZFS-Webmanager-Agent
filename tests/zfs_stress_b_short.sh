@@ -7,6 +7,7 @@
 #
 # TESTS INCLUDED:
 #   PO1-PO5: Pool creation/destruction edge cases
+#   VD1-VD5: Vdev operations (basic error cases)
 #   SC1-SC2: Scrub basic edge cases
 #   EI1-EI3: Export/Import basic edge cases
 #   RE1-RE5: Replication basic edge cases
@@ -231,7 +232,84 @@ test_pool_destroy_nonexistent() {
 }
 
 # ==============================================================================
-# TEST B2: Scrub Operations (SC1-SC2)
+# TEST B2: Vdev Operations (VD1-VD5)
+# ==============================================================================
+
+test_vdev_nonexistent_pool() {
+    log_header "VD1: ADD VDEV TO NON-EXISTENT POOL"
+    log_test "POST /pools/fake_pool_xyz/vdev"
+    local response
+    response=$(api POST "/v1/pools/fake_pool_xyz/vdev" '{"vdev_type": "disk", "devices": ["/dev/sda"]}')
+    if is_error "$response"; then
+        log_expect_error "$(json_field "$response" "message")"
+        log_pass
+    else
+        log_fail "Should error for nonexistent pool"
+    fi
+}
+
+test_vdev_invalid_device() {
+    log_header "VD2: ADD VDEV WITH INVALID DEVICE PATH"
+    log_test "POST /pools/$STRESS_POOL/vdev with nonexistent device"
+    local response
+    response=$(api POST "/v1/pools/$STRESS_POOL/vdev" '{"vdev_type": "disk", "devices": ["/dev/nonexistent_device_xyz"]}')
+    if is_error "$response"; then
+        log_expect_error "$(json_field "$response" "message")"
+        log_pass
+    else
+        log_fail "Should error for invalid device path"
+    fi
+}
+
+test_vdev_invalid_type() {
+    log_header "VD3: ADD VDEV WITH INVALID VDEV_TYPE"
+    log_test "POST /pools/$STRESS_POOL/vdev with invalid type"
+    local response
+    response=$(api POST "/v1/pools/$STRESS_POOL/vdev" '{"vdev_type": "invalid_type_xyz", "devices": ["/dev/sda"]}')
+    if is_error "$response"; then
+        log_expect_error "$(json_field "$response" "message")"
+        log_pass
+    else
+        log_fail "Should error for invalid vdev_type"
+    fi
+}
+
+test_vdev_device_in_pool() {
+    log_header "VD4: ADD VDEV WITH DEVICE ALREADY IN POOL"
+    log_test "POST /pools/$STRESS_POOL/vdev with device already in use"
+    local response
+    # DISK_1 is already part of STRESS_POOL (mirror)
+    response=$(api POST "/v1/pools/$STRESS_POOL/vdev" "{\"vdev_type\": \"disk\", \"devices\": [\"$DISK_1\"]}")
+    if is_error "$response"; then
+        log_expect_error "$(json_field "$response" "message")"
+        log_pass
+    else
+        log_fail "Should error for device already in pool"
+    fi
+}
+
+test_vdev_verify_pool_status() {
+    log_header "VD5: VERIFY POOL STATUS AFTER VDEV ATTEMPTS"
+    log_test "GET /pools/$STRESS_POOL (verify still healthy after error cases)"
+    local response
+    response=$(api GET "/v1/pools/$STRESS_POOL")
+    if is_success "$response"; then
+        local health
+        health=$(json_field "$response" "health")
+        log_info "Pool health: $health"
+        # Case-insensitive comparison (API returns "Online", zpool returns "ONLINE")
+        if [[ "${health^^}" == "ONLINE" ]]; then
+            log_pass
+        else
+            log_fail "Pool health is $health, expected ONLINE/Online"
+        fi
+    else
+        log_fail "$(json_field "$response" "message")"
+    fi
+}
+
+# ==============================================================================
+# TEST B3: Scrub Operations (SC1-SC2)
 # ==============================================================================
 
 test_scrub_nonexistent_pool() {
@@ -590,6 +668,13 @@ main() {
     test_pool_duplicate_name
     test_pool_raid_types
     test_pool_destroy_nonexistent
+
+    # Vdev operations VD1-VD5 (error cases only - adding real vdevs is destructive)
+    test_vdev_nonexistent_pool
+    test_vdev_invalid_device
+    test_vdev_invalid_type
+    test_vdev_device_in_pool
+    test_vdev_verify_pool_status
 
     # Scrub SC1-SC2
     test_scrub_nonexistent_pool

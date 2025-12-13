@@ -1,7 +1,8 @@
 use crate::models::{ActionResponse, LastAction};
+use crate::safety::SafetyManager;
 use serde::Serialize;
 use std::sync::{Arc, RwLock};
-use warp::Filter;
+use warp::{Filter, Rejection};
 
 // Success response helper
 pub fn success_response<T: Serialize>(data: T) -> warp::reply::Json {
@@ -62,6 +63,33 @@ pub fn with_action_tracking(
             }
         })
         .untuple_one() // ← collapses ((),) to ()
+}
+
+// ============================================================================
+// Safety Lock System
+// ============================================================================
+
+/// Custom rejection for safety lock - blocks mutating operations
+#[derive(Debug)]
+pub struct SafetyLockError(pub String);
+
+impl warp::reject::Reject for SafetyLockError {}
+
+/// Warp filter that blocks mutating requests when safety lock is active.
+/// Returns a SafetyLockError rejection that gets converted to HTTP 200 with locked status.
+pub fn safety_check(
+    safety_manager: SafetyManager,
+) -> impl Filter<Extract = (), Error = Rejection> + Clone {
+    warp::any()
+        .map(move || safety_manager.clone())
+        .and_then(|sm: SafetyManager| async move {
+            if sm.is_locked() {
+                Err(warp::reject::custom(SafetyLockError(sm.get_lock_message())))
+            } else {
+                Ok(())
+            }
+        })
+        .untuple_one()
 }
 
 // ============================================================================

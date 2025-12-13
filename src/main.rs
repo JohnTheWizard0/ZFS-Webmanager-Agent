@@ -1,6 +1,7 @@
 mod auth;
 mod handlers;
 mod models;
+mod safety;
 mod task_manager;
 mod utils;
 mod zfs_management;
@@ -8,22 +9,33 @@ mod zfs_management;
 use auth::*;
 use handlers::*;
 use models::{
-    CloneSnapshotRequest, CommandRequest, CreateDataset, CreatePool, CreateSnapshot,
-    DeleteDatasetQuery, ExportPoolRequest, ImportPoolRequest, LastAction, ReceiveSnapshotRequest,
-    ReplicateSnapshotRequest, RollbackRequest, SendSizeQuery, SendSnapshotRequest,
-    SetPropertyRequest,
+    AddVdevRequest, CloneSnapshotRequest, CommandRequest, CreateDataset, CreatePool,
+    CreateSnapshot, DeleteDatasetQuery, ExportPoolRequest, ImportPoolRequest, LastAction,
+    ReceiveSnapshotRequest, ReplicateSnapshotRequest, RollbackRequest, SafetyOverrideRequest,
+    SendSizeQuery, SendSnapshotRequest, SetPropertyRequest,
 };
+use safety::SafetyManager;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::{Arc, RwLock};
 use task_manager::TaskManager;
-use utils::with_action_tracking;
+use utils::{safety_check, with_action_tracking, SafetyLockError};
 use warp::{http::StatusCode, Filter, Rejection, Reply};
 use zfs_management::ZfsManager;
 
 /// Custom rejection handler for API errors
-/// Converts ApiKeyError rejections into proper HTTP 401 responses
+/// Converts ApiKeyError and SafetyLockError rejections into proper HTTP responses
 async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
+    // Handle safety lock first - return HTTP 200 with locked status per requirement
+    if let Some(e) = err.find::<SafetyLockError>() {
+        let json = warp::reply::json(&serde_json::json!({
+            "status": "error",
+            "message": e.0,
+            "locked": true
+        }));
+        return Ok(warp::reply::with_status(json, StatusCode::OK));
+    }
+
     let (code, message) = if let Some(e) = err.find::<ApiKeyError>() {
         match e {
             ApiKeyError::Missing => (StatusCode::UNAUTHORIZED, "Unauthorized: API key required"),
@@ -56,6 +68,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting ZFS Web Manager...");
     println!("Version: {}", env!("CARGO_PKG_VERSION"));
 
+    // Initialize safety manager (detects ZFS version)
+    let safety_manager = SafetyManager::new()?;
+    let safety_state = safety_manager.get_state();
+    let settings = safety_manager.get_settings();
+
+    // Log ZFS version and safety status
+    println!(
+        "ZFS Version: {} (detected via {})",
+        safety_state.zfs_version.full_version, safety_state.zfs_version.detection_method
+    );
+    println!(
+        "Approved range: {} - {}",
+        settings.min_zfs_version, settings.max_zfs_version
+    );
+
+    if safety_state.locked {
+        println!("WARNING: Safety lock ACTIVE - ZFS version {} not in approved range",
+            safety_state.zfs_version.semantic_version);
+        println!("         Use POST /v1/safety to override");
+    } else {
+        println!("Safety: ZFS version approved, all operations permitted");
+    }
+
     // Generate or read API key
     let api_key = get_or_create_api_key()?;
     println!("\nAPI Key: {}", api_key);
@@ -70,6 +105,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize task manager for async replication operations
     let task_manager = TaskManager::new();
     let task_mgr = warp::any().map(move || task_manager.clone());
+
+    // Safety check filter for mutating routes
+    let safety_filter = safety_check(safety_manager.clone());
+
+    // Helper to inject SafetyManager
+    let with_safety = {
+        let sm = safety_manager.clone();
+        warp::any().map(move || sm.clone())
+    };
 
     // API key check filter
     let api_key_check = warp::header::headers_cloned()
@@ -111,6 +155,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             zfs_features_handler(format)
         });
 
+    // Safety routes (no auth required - must be accessible when locked)
+    // GET /v1/safety - Get safety status
+    // POST /v1/safety - Override safety lock
+    let safety_routes = {
+        let get_status = warp::get()
+            .and(warp::path("safety"))
+            .and(warp::path::end())
+            .and(with_safety.clone())
+            .and_then(safety_status_handler);
+
+        let override_lock = warp::post()
+            .and(warp::path("safety"))
+            .and(warp::path::end())
+            .and(warp::body::json())
+            .and(with_safety.clone())
+            .and_then(|body: SafetyOverrideRequest, sm: SafetyManager| {
+                safety_override_handler(body, sm)
+            });
+
+        get_status.or(override_lock)
+    };
+
     // Pool routes
     let pool_routes = {
         let list = warp::get()
@@ -133,6 +199,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let create = warp::post()
             .and(warp::path("pools"))
             .and(warp::path::end())
+            .and(safety_filter.clone())
             .and(warp::body::json())
             .and(with_action_tracking("create_pool", last_action.clone()))
             .and(zfs.clone())
@@ -143,6 +210,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and(warp::path("pools"))
             .and(warp::path::param())
             .and(warp::path::end())
+            .and(safety_filter.clone())
             .and(warp::query::<HashMap<String, String>>())
             .and(with_action_tracking("delete_pool", last_action.clone()))
             .and(zfs.clone())
@@ -164,6 +232,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and(warp::path::param())
             .and(warp::path("scrub"))
             .and(warp::path::end())
+            .and(safety_filter.clone())
             .and(with_action_tracking("start_scrub", last_action.clone()))
             .and(zfs.clone())
             .and(api_key_check.clone())
@@ -175,6 +244,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and(warp::path("scrub"))
             .and(warp::path("pause"))
             .and(warp::path::end())
+            .and(safety_filter.clone())
             .and(with_action_tracking("pause_scrub", last_action.clone()))
             .and(zfs.clone())
             .and(api_key_check.clone())
@@ -186,6 +256,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and(warp::path("scrub"))
             .and(warp::path("stop"))
             .and(warp::path::end())
+            .and(safety_filter.clone())
             .and(with_action_tracking("stop_scrub", last_action.clone()))
             .and(zfs.clone())
             .and(api_key_check.clone())
@@ -213,6 +284,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and(warp::path::param())
             .and(warp::path("export"))
             .and(warp::path::end())
+            .and(safety_filter.clone())
             .and(warp::body::json())
             .and(with_action_tracking("export_pool", last_action.clone()))
             .and(zfs.clone())
@@ -243,11 +315,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and(warp::path("pools"))
             .and(warp::path("import"))
             .and(warp::path::end())
+            .and(safety_filter.clone())
             .and(warp::body::json())
             .and(with_action_tracking("import_pool", last_action.clone()))
             .and(zfs.clone())
             .and(api_key_check.clone())
             .and_then(|body: ImportPoolRequest, zfs: ZfsManager, _| import_pool_handler(body, zfs));
+
+        // Vdev operations
+        // POST /pools/{name}/vdev - add vdev to pool
+        let add_vdev = warp::post()
+            .and(warp::path("pools"))
+            .and(warp::path::param())
+            .and(warp::path("vdev"))
+            .and(warp::path::end())
+            .and(safety_filter.clone())
+            .and(warp::body::json())
+            .and(with_action_tracking("add_vdev", last_action.clone()))
+            .and(zfs.clone())
+            .and(api_key_check.clone())
+            .and_then(|name: String, body: AddVdevRequest, zfs: ZfsManager, _| {
+                add_vdev_handler(name, body, zfs)
+            });
 
         // IMPORTANT: Route order matters for warp path matching!
         // - list_importable (GET /pools/importable) MUST come BEFORE status (GET /pools/{param})
@@ -262,6 +351,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .or(scrub_stop)
             .or(scrub_status)
             .or(export_pool)
+            .or(add_vdev)
     };
 
     // Snapshot routes
@@ -298,6 +388,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Ok(tail)
                 }
             })
+            .and(safety_filter.clone())
             .and(warp::body::json())
             .and(with_action_tracking("create_snapshot", last_action.clone()))
             .and(zfs.clone())
@@ -311,6 +402,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let delete = warp::delete()
             .and(warp::path("snapshots"))
             .and(warp::path::tail())
+            .and(safety_filter.clone())
             .and(with_action_tracking("delete_snapshot", last_action.clone()))
             .and(zfs.clone())
             .and(api_key_check.clone())
@@ -330,6 +422,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Err(warp::reject::not_found())
                 }
             })
+            .and(safety_filter.clone())
             .and(warp::body::json())
             .and(with_action_tracking("clone_snapshot", last_action.clone()))
             .and(zfs.clone())
@@ -394,6 +487,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Err(warp::reject::not_found())
                 }
             })
+            .and(safety_filter.clone())
             .and(warp::body::json())
             .and(with_action_tracking("set_dataset_property", last_action.clone()))
             .and(zfs.clone())
@@ -408,6 +502,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let promote = warp::post()
             .and(warp::path("datasets"))
             .and(warp::path::tail())
+            .and(safety_filter.clone())
             .and(with_action_tracking("promote_dataset", last_action.clone()))
             .and(zfs.clone())
             .and(api_key_check.clone())
@@ -435,6 +530,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Err(warp::reject::not_found())
                 }
             })
+            .and(safety_filter.clone())
             .and(warp::body::json())
             .and(with_action_tracking(
                 "rollback_dataset",
@@ -453,6 +549,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let delete = warp::delete()
             .and(warp::path("datasets"))
             .and(warp::path::tail())
+            .and(safety_filter.clone())
             .and(warp::query::<DeleteDatasetQuery>())
             .and(with_action_tracking("delete_dataset", last_action.clone()))
             .and(zfs.clone())
@@ -466,6 +563,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let create = warp::post()
             .and(warp::path("datasets"))
             .and(warp::path::end())
+            .and(safety_filter.clone())
             .and(warp::body::json())
             .and(with_action_tracking("create_dataset", last_action.clone()))
             .and(zfs.clone())
@@ -490,6 +588,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         warp::post()
             .and(warp::path("command"))
             .and(warp::path::end())
+            .and(safety_filter.clone())
             .and(warp::body::json())
             .and(warp::any().map(move || last_action.clone()))
             .and(api_key_check.clone())
@@ -543,6 +642,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Err(warp::reject::not_found())
                 }
             })
+            .and(safety_filter.clone())
             .and(warp::body::json())
             .and(zfs.clone())
             .and(task_mgr.clone())
@@ -571,6 +671,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Err(warp::reject::not_found())
                 }
             })
+            .and(safety_filter.clone())
             .and(warp::body::json())
             .and(zfs.clone())
             .and(task_mgr.clone())
@@ -592,6 +693,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let replicate_snapshot = warp::post()
             .and(warp::path("replication"))
             .and(warp::path::tail())
+            .and(safety_filter.clone())
             .and(warp::body::json())
             .and(zfs.clone())
             .and(task_mgr.clone())
@@ -635,6 +737,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "docs",
                 "openapi.yaml",
                 "features",
+                "safety",
             ];
 
             // Check if path starts with any known prefix
@@ -677,6 +780,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .or(docs_route)
                 .or(openapi_route)
                 .or(zfs_features_route)
+                .or(safety_routes) // Safety routes (no auth, works when locked)
                 .or(pool_routes)
                 .or(dataset_routes)
                 .or(task_routes) // BEFORE snapshot_routes (has /send, /replicate)

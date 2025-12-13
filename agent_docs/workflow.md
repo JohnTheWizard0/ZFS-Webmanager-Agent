@@ -39,8 +39,7 @@ ToDo → Plan → Implement → Test → Commit(develop) → Harden → Commit(m
   - Happy path
   - Edge cases (empty input, boundary values)
   - Error conditions
-- **Automatic**: Targeted tests run after each file edit (PostToolUse hook)
-- **Before commit**: Run full suite with `.claude/hooks/run_tests.sh`
+
 
 ## 5. Commit to Develop
 - **Enforced**: Full test suite must pass (PreToolUse hook blocks otherwise)

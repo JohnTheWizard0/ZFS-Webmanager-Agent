@@ -7,6 +7,7 @@
 #
 # TESTS INCLUDED:
 #   PO1-PO10: All pool operation edge cases
+#   VD1-VD10: All vdev operation edge cases
 #   SC1-SC5:  All scrub edge cases
 #   EI1-EI7:  All export/import edge cases
 #   RE1-RE12: All replication edge cases
@@ -281,6 +282,187 @@ test_pool_max_length() {
     local response
     response=$(api POST "/v1/pools" "{\"name\": \"$long_name\", \"raid_type\": \"stripe\", \"disks\": [\"/dev/sda\"]}")
     is_error "$response" && { log_expect_error "$(json_field "$response" "message")"; log_pass; } || { log_info "Accepted or failed gracefully"; log_pass; }
+}
+
+# ==============================================================================
+# Vdev Operations (VD1-VD10)
+# ==============================================================================
+
+test_vdev_nonexistent_pool() {
+    log_header "VD1: ADD VDEV TO NON-EXISTENT POOL"
+    log_test "POST /pools/fake_pool_xyz/vdev"
+    local response
+    response=$(api POST "/v1/pools/fake_pool_xyz/vdev" '{"vdev_type": "disk", "devices": ["/dev/sda"]}')
+    if is_error "$response"; then
+        log_expect_error "$(json_field "$response" "message")"
+        log_pass
+    else
+        log_fail "Should error for nonexistent pool"
+    fi
+}
+
+test_vdev_invalid_device() {
+    log_header "VD2: ADD VDEV WITH INVALID DEVICE PATH"
+    log_test "POST /pools/$STRESS_POOL/vdev with nonexistent device"
+    local response
+    response=$(api POST "/v1/pools/$STRESS_POOL/vdev" '{"vdev_type": "disk", "devices": ["/dev/nonexistent_device_xyz"]}')
+    if is_error "$response"; then
+        log_expect_error "$(json_field "$response" "message")"
+        log_pass
+    else
+        log_fail "Should error for invalid device path"
+    fi
+}
+
+test_vdev_invalid_type() {
+    log_header "VD3: ADD VDEV WITH INVALID VDEV_TYPE"
+    log_test "POST /pools/$STRESS_POOL/vdev with invalid type"
+    local response
+    response=$(api POST "/v1/pools/$STRESS_POOL/vdev" '{"vdev_type": "invalid_type_xyz", "devices": ["/dev/sda"]}')
+    if is_error "$response"; then
+        log_expect_error "$(json_field "$response" "message")"
+        log_pass
+    else
+        log_fail "Should error for invalid vdev_type"
+    fi
+}
+
+test_vdev_device_in_pool() {
+    log_header "VD4: ADD VDEV WITH DEVICE ALREADY IN POOL"
+    log_test "POST /pools/$STRESS_POOL/vdev with device already in use"
+    local response
+    # DISK_1 is already part of STRESS_POOL (mirror)
+    response=$(api POST "/v1/pools/$STRESS_POOL/vdev" "{\"vdev_type\": \"disk\", \"devices\": [\"$DISK_1\"]}")
+    if is_error "$response"; then
+        log_expect_error "$(json_field "$response" "message")"
+        log_pass
+    else
+        log_fail "Should error for device already in pool"
+    fi
+}
+
+test_vdev_verify_pool_status() {
+    log_header "VD5: VERIFY POOL STATUS AFTER VDEV ATTEMPTS"
+    log_test "GET /pools/$STRESS_POOL (verify still healthy after error cases)"
+    local response
+    response=$(api GET "/v1/pools/$STRESS_POOL")
+    if is_success "$response"; then
+        local health
+        health=$(json_field "$response" "health")
+        log_info "Pool health: $health"
+        # Case-insensitive comparison (API returns "Online", zpool returns "ONLINE")
+        if [[ "${health^^}" == "ONLINE" ]]; then
+            log_pass
+        else
+            log_fail "Pool health is $health, expected ONLINE/Online"
+        fi
+    else
+        log_fail "$(json_field "$response" "message")"
+    fi
+}
+
+test_vdev_add_mirror() {
+    log_header "VD6: ADD MIRROR VDEV (2 DEVICES)"
+    # NOTE: This test requires spare disks. Since all 4 disks are in use,
+    # we skip this test unless additional disks are available.
+    log_test "POST /pools/$STRESS_POOL/vdev with mirror type"
+
+    # Check if we have spare disks (DISK_5 and DISK_6)
+    # Use loop devices if physical disks aren't available
+    local DISK_5="${DISK_5:-/dev/loop0}"
+    local DISK_6="${DISK_6:-/dev/loop1}"
+    if [[ -b "$DISK_5" ]] && [[ -b "$DISK_6" ]]; then
+        local response
+        response=$(api POST "/v1/pools/$STRESS_POOL/vdev" "{\"vdev_type\": \"mirror\", \"devices\": [\"$DISK_5\", \"$DISK_6\"]}")
+        if is_success "$response"; then
+            log_info "Mirror vdev added successfully"
+            log_info "Pool: $(json_field "$response" "pool")"
+            log_info "Devices: $(echo "$response" | grep -o '"devices":\[[^]]*\]' | head -1)"
+            log_pass
+        else
+            log_fail "$(json_field "$response" "message")"
+        fi
+    else
+        log_skip "No spare disks available ($DISK_5, $DISK_6)"
+    fi
+}
+
+test_vdev_add_single_disk() {
+    log_header "VD7: ADD SINGLE DISK VDEV"
+    # NOTE: This test requires a spare disk that wasn't used in VD6.
+    # VD6 uses DISK_5/DISK_6 (loop0/loop1), so we use DISK_7 (loop2) here.
+    log_test "POST /pools/$STRESS_POOL/vdev with single disk"
+
+    # Use loop2 device if available (loop0/loop1 were used in VD6 mirror)
+    local DISK_7="${DISK_7:-/dev/loop2}"
+    if [[ -b "$DISK_7" ]]; then
+        local response
+        response=$(api POST "/v1/pools/$STRESS_POOL/vdev" "{\"vdev_type\": \"disk\", \"devices\": [\"$DISK_7\"]}")
+        if is_success "$response"; then
+            log_info "Single disk vdev added successfully"
+            log_info "Pool: $(json_field "$response" "pool")"
+            log_pass
+        else
+            log_fail "$(json_field "$response" "message")"
+        fi
+    else
+        # Test with device from another pool (should fail)
+        log_info "No spare disk ($DISK_7), testing with in-use disk"
+        local response
+        response=$(api POST "/v1/pools/$STRESS_POOL/vdev" "{\"vdev_type\": \"disk\", \"devices\": [\"$DISK_3\"]}")
+        if is_error "$response"; then
+            log_expect_error "$(json_field "$response" "message")"
+            log_pass
+        else
+            log_fail "Should error for disk in use by another pool"
+        fi
+    fi
+}
+
+test_vdev_with_force() {
+    log_header "VD8: ADD VDEV WITH FORCE=TRUE"
+    log_test "POST /pools/$STRESS_POOL/vdev with force flag"
+    # Test that force flag is accepted (even if operation fails due to no spare disks)
+    local response
+    response=$(api POST "/v1/pools/$STRESS_POOL/vdev" '{"vdev_type": "disk", "devices": ["/dev/nonexistent_xyz"], "force": true}')
+    if is_error "$response"; then
+        # Expected: device doesn't exist, but force flag should be accepted
+        log_expect_error "$(json_field "$response" "message")"
+        log_pass
+    else
+        log_fail "Should error for nonexistent device (force only bypasses some checks)"
+    fi
+}
+
+test_vdev_check_ashift_false() {
+    log_header "VD9: ADD VDEV WITH CHECK_ASHIFT=FALSE"
+    log_test "POST /pools/$STRESS_POOL/vdev with check_ashift=false"
+    # Test that check_ashift flag is accepted (even if operation fails due to no spare disks)
+    local response
+    response=$(api POST "/v1/pools/$STRESS_POOL/vdev" '{"vdev_type": "disk", "devices": ["/dev/nonexistent_xyz"], "check_ashift": false}')
+    if is_error "$response"; then
+        # Expected: device doesn't exist, but check_ashift flag should be accepted
+        log_expect_error "$(json_field "$response" "message")"
+        log_pass
+    else
+        log_fail "Should error for nonexistent device"
+    fi
+}
+
+test_vdev_malformed_json() {
+    log_header "VD10: ADD VDEV WITH MALFORMED JSON BODY"
+    log_test "POST /pools/$STRESS_POOL/vdev with invalid JSON"
+    local response
+    response=$(curl -s -X POST "${API_URL}/v1/pools/$STRESS_POOL/vdev" \
+        -H "Content-Type: application/json" \
+        -H "X-API-Key: $API_KEY" \
+        -d 'this is not valid json{{{' 2>/dev/null)
+    if is_error "$response" || echo "$response" | grep -qi "parse\|json\|invalid\|deserialize"; then
+        log_expect_error "$(echo "$response" | head -c 100)"
+        log_pass
+    else
+        log_fail "Should reject malformed JSON"
+    fi
 }
 
 # ==============================================================================
@@ -810,6 +992,18 @@ main() {
     test_pool_status_nonexistent
     test_pool_special_chars
     test_pool_max_length
+
+    # Vdev VD1-VD10 (comprehensive vdev tests)
+    test_vdev_nonexistent_pool
+    test_vdev_invalid_device
+    test_vdev_invalid_type
+    test_vdev_device_in_pool
+    test_vdev_verify_pool_status
+    test_vdev_add_mirror
+    test_vdev_add_single_disk
+    test_vdev_with_force
+    test_vdev_check_ashift_false
+    test_vdev_malformed_json
 
     # Scrub SC1-SC5
     test_scrub_nonexistent_pool

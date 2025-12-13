@@ -779,6 +779,69 @@ pub struct SendSizeQuery {
     pub raw: bool,
 }
 
+// ============================================================================
+// Pool Vdev Operations
+// ============================================================================
+
+/// Helper for serde default true
+fn default_true() -> bool {
+    true
+}
+
+/// Request to add a vdev to an existing pool
+/// POST /v1/pools/{name}/vdev
+///
+/// Supports adding:
+/// - Data vdevs: disk, mirror, raidz, raidz2, raidz3
+/// - Special vdevs: log, cache, spare, special, dedup
+///
+/// # Examples
+/// ```json
+/// // Add a mirror vdev
+/// {"vdev_type": "mirror", "devices": ["/dev/sdc", "/dev/sdd"]}
+///
+/// // Add a single disk
+/// {"vdev_type": "disk", "devices": ["/dev/sde"]}
+///
+/// // Add a raidz2 vdev
+/// {"vdev_type": "raidz2", "devices": ["/dev/sdf", "/dev/sdg", "/dev/sdh", "/dev/sdi"]}
+///
+/// // Add a SLOG device
+/// {"vdev_type": "log", "devices": ["/dev/nvme0n1"]}
+///
+/// // Add a cache device (L2ARC)
+/// {"vdev_type": "cache", "devices": ["/dev/nvme1n1"]}
+/// ```
+#[derive(Debug, Deserialize)]
+pub struct AddVdevRequest {
+    /// Type of vdev to add
+    /// Data vdevs: "disk", "mirror", "raidz", "raidz2", "raidz3"
+    /// Special vdevs: "log", "cache", "spare", "special", "dedup"
+    pub vdev_type: String,
+
+    /// Device paths (e.g., ["/dev/sdc", "/dev/sdd"])
+    pub devices: Vec<String>,
+
+    /// Force add even if devices appear in use (-f flag)
+    #[serde(default)]
+    pub force: bool,
+
+    /// Check and warn on ashift mismatch (default: true)
+    /// Mismatched ashift can prevent future vdev removal
+    #[serde(default = "default_true")]
+    pub check_ashift: bool,
+}
+
+/// Response after successfully adding a vdev
+#[derive(Debug, Serialize)]
+pub struct AddVdevResponse {
+    pub status: String,
+    pub pool: String,
+    pub vdev_type: String,
+    pub devices: Vec<String>,
+    pub message: String,
+}
+
 /// Response for send size estimation
 #[derive(Debug, Serialize)]
 pub struct SendSizeResponse {
@@ -789,6 +852,75 @@ pub struct SendSizeResponse {
     pub incremental: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub from_snapshot: Option<String>,
+}
+
+// ============================================================================
+// Safety Lock System
+// ============================================================================
+
+/// Detected ZFS version information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZfsVersionInfo {
+    /// Full version string (e.g., "2.1.5-1ubuntu6~22.04.1")
+    pub full_version: String,
+    /// Parsed semantic version (e.g., "2.1.5")
+    pub semantic_version: String,
+    /// Major version number
+    pub major: u32,
+    /// Minor version number
+    pub minor: u32,
+    /// Patch version number (if available)
+    pub patch: Option<u32>,
+    /// Detection method used
+    pub detection_method: String,
+}
+
+/// Safety lock state
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SafetyState {
+    /// Whether safety lock is currently active (blocking mutations)
+    pub locked: bool,
+    /// ZFS version detected at startup
+    pub zfs_version: ZfsVersionInfo,
+    /// Agent version (from Cargo.toml)
+    pub agent_version: String,
+    /// List of approved ZFS versions
+    pub approved_versions: Vec<String>,
+    /// Whether the detected version is compatible
+    pub compatible: bool,
+    /// Reason for lock (if locked)
+    pub lock_reason: Option<String>,
+    /// Timestamp when lock was overridden (if applicable)
+    pub override_at: Option<u64>,
+}
+
+/// GET /v1/safety response
+#[derive(Debug, Serialize)]
+pub struct SafetyStatusResponse {
+    pub status: String,
+    pub locked: bool,
+    pub compatible: bool,
+    pub zfs_version: ZfsVersionInfo,
+    pub agent_version: String,
+    pub approved_versions: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lock_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub override_at: Option<u64>,
+}
+
+/// POST /v1/safety request
+#[derive(Debug, Deserialize)]
+pub struct SafetyOverrideRequest {
+    pub action: String, // Currently only "override" is supported
+}
+
+/// POST /v1/safety response
+#[derive(Debug, Serialize)]
+pub struct SafetyOverrideResponse {
+    pub status: String,
+    pub message: String,
+    pub locked: bool,
 }
 
 // ============================================================================
