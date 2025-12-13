@@ -12,6 +12,8 @@ uuid = { version = "1.0", features = ["v4"] }
 rand = "0.9.2"
 libzetta = "0.5.0"
 libzfs = "0.6.16"
-libzetta-zfs-core-sys = "0.5.2"  # FFI bindings for lzc_clone, lzc_promote
+libzfs-sys = "0.5.11"             # FFI bindings for zpool_import with rename
+nvpair-sys = "0.1"                # nvlist FFI for pool config lookup (matches libzfs-sys dep)
+libzetta-zfs-core-sys = "0.5.2"   # FFI bindings for lzc_clone, lzc_promote
 libc = "0.2"                      # For CString FFI
 dirs = "6.0"

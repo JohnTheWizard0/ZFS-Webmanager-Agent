@@ -1,18 +1,30 @@
 use crate::models::CreatePool;
-use libzetta::zpool::{ZpoolEngine, ZpoolOpen3, CreateVdevRequest, CreateZpoolRequest, DestroyMode, ExportMode};
-use libzetta::zfs::{ZfsEngine, DelegatingZfsEngine, CreateDatasetRequest, DatasetKind};
-use std::path::PathBuf;
-use std::sync::Arc;
+use libzetta::zfs::{CreateDatasetRequest, DatasetKind, DelegatingZfsEngine, ZfsEngine};
+use libzetta::zpool::{
+    CreateVdevRequest, CreateZpoolRequest, DestroyMode, ExportMode, ZpoolEngine, ZpoolOpen3,
+};
 use std::ffi::CString;
+use std::path::PathBuf;
 use std::ptr;
+use std::sync::Arc;
 
 // libzfs for scan stats (from-scratch implementation)
 // libzetta doesn't expose scan progress, so we use libzfs FFI bindings directly
 use libzfs::Libzfs;
 
+// libzfs-sys FFI for import with rename (libzfs wrapper doesn't expose newname parameter)
+use libzfs_sys::{
+    import_args, libzfs_error_description, libzfs_fini, libzfs_init, zpool_import,
+    zpool_search_import,
+};
+// nvpair-sys for nvlist_lookup_nvlist (pool config extraction)
+use nvpair_sys::nvlist_lookup_nvlist;
+
 // libzetta-zfs-core-sys for clone/promote/rollback/send_space/destroy FFI (not exposed by libzetta)
 // NOTE: lzc_receive is too low-level (doesn't parse stream headers), so we use CLI `zfs receive`
-use libzetta_zfs_core_sys::{lzc_clone, lzc_promote, lzc_rollback_to, lzc_send_space, lzc_send_flags, lzc_destroy};
+use libzetta_zfs_core_sys::{
+    lzc_clone, lzc_destroy, lzc_promote, lzc_rollback_to, lzc_send_flags, lzc_send_space,
+};
 
 // For libzetta send
 use libzetta::zfs::SendFlags;
@@ -46,9 +58,11 @@ pub struct ZfsManager {
 impl ZfsManager {
     pub fn new() -> Result<Self, ZfsError> {
         let zpool_engine = Arc::new(ZpoolOpen3::default());
-        let zfs_engine = Arc::new(DelegatingZfsEngine::new()
-            .map_err(|e| format!("Failed to initialize ZFS engine: {}", e))?);
-        
+        let zfs_engine = Arc::new(
+            DelegatingZfsEngine::new()
+                .map_err(|e| format!("Failed to initialize ZFS engine: {}", e))?,
+        );
+
         Ok(ZfsManager {
             zpool_engine,
             zfs_engine,
@@ -58,31 +72,42 @@ impl ZfsManager {
     pub async fn list_pools(&self) -> Result<Vec<String>, ZfsError> {
         // FIXED: Create owned value to avoid borrowing issue
         let status_options = libzetta::zpool::open3::StatusOptions::default();
-        let zpools = self.zpool_engine.status_all(status_options)
+        let zpools = self
+            .zpool_engine
+            .status_all(status_options)
             .map_err(|e| format!("Failed to list pools: {}", e))?;
-        
-        let pool_names = zpools.into_iter()
+
+        let pool_names = zpools
+            .into_iter()
             .map(|zpool| zpool.name().clone())
             .collect();
-        
+
         Ok(pool_names)
     }
 
     pub async fn get_pool_status(&self, name: &str) -> Result<PoolStatus, ZfsError> {
         // Guard against libzetta panic: check pool exists before calling status()
         // libzetta's status() has a bug where it panics instead of returning error
-        if !self.zpool_engine.exists(name).map_err(|e| format!("Failed to check pool existence: {}", e))? {
+        if !self
+            .zpool_engine
+            .exists(name)
+            .map_err(|e| format!("Failed to check pool existence: {}", e))?
+        {
             return Err(format!("Pool '{}' not found", name));
         }
 
         // FIXED: Create owned value and avoid temporary borrowing
         let status_options = libzetta::zpool::open3::StatusOptions::default();
-        let zpool = self.zpool_engine.status(name, status_options)
+        let zpool = self
+            .zpool_engine
+            .status(name, status_options)
             .map_err(|e| format!("Failed to get pool status: {}", e))?;
-        
-        let properties = self.zpool_engine.read_properties(name)
+
+        let properties = self
+            .zpool_engine
+            .read_properties(name)
             .map_err(|e| format!("Failed to read pool properties: {}", e))?;
-        
+
         // Extract values before creating PoolStatus to avoid borrowing issues
         let pool_name = zpool.name().clone();
         let pool_health = format!("{:?}", zpool.health());
@@ -92,7 +117,7 @@ impl ZfsManager {
         let pool_capacity = *properties.capacity();
         let pool_vdevs = zpool.vdevs().len() as u32;
         let pool_errors = zpool.errors().clone();
-        
+
         Ok(PoolStatus {
             name: pool_name,
             health: pool_health,
@@ -107,7 +132,7 @@ impl ZfsManager {
 
     pub async fn create_pool(&self, pool: CreatePool) -> Result<(), ZfsError> {
         let disks: Vec<PathBuf> = pool.disks.into_iter().map(PathBuf::from).collect();
-        
+
         let vdev = match pool.raid_type.as_deref() {
             Some("mirror") => CreateVdevRequest::Mirror(disks),
             Some("raidz") => CreateVdevRequest::RaidZ(disks),
@@ -128,7 +153,8 @@ impl ZfsManager {
             .build()
             .map_err(|e| format!("Failed to build pool request: {}", e))?;
 
-        self.zpool_engine.create(request)
+        self.zpool_engine
+            .create(request)
             .map_err(|e| format!("Failed to create pool: {}", e))?;
 
         Ok(())
@@ -136,31 +162,43 @@ impl ZfsManager {
 
     pub async fn destroy_pool(&self, name: &str, force: bool) -> Result<(), ZfsError> {
         // Verify pool exists before attempting destroy
-        let pools = self.zpool_engine.available()
+        let pools = self
+            .zpool_engine
+            .available()
             .map_err(|e| format!("Failed to list pools: {}", e))?;
 
         if !pools.iter().any(|p| p.name() == name) {
             return Err(format!("Pool '{}' does not exist", name));
         }
 
-        let mode = if force { DestroyMode::Force } else { DestroyMode::Gentle };
+        let mode = if force {
+            DestroyMode::Force
+        } else {
+            DestroyMode::Gentle
+        };
 
-        self.zpool_engine.destroy(name, mode)
+        self.zpool_engine
+            .destroy(name, mode)
             .map_err(|e| format!("Failed to destroy pool: {}", e))?;
 
         Ok(())
     }
 
     // =========================================================================
-    // Pool Import/Export Operations (MF-001 Phase 2)
+    // Pool Import/Export Operations
     // =========================================================================
 
     /// Export a pool from the system
     /// libzetta: ZpoolEngine::export()
     pub async fn export_pool(&self, name: &str, force: bool) -> Result<(), ZfsError> {
-        let mode = if force { ExportMode::Force } else { ExportMode::Gentle };
+        let mode = if force {
+            ExportMode::Force
+        } else {
+            ExportMode::Gentle
+        };
 
-        self.zpool_engine.export(name, mode)
+        self.zpool_engine
+            .export(name, mode)
             .map_err(|e| format!("Failed to export pool: {}", e))?;
 
         Ok(())
@@ -169,31 +207,45 @@ impl ZfsManager {
     /// List pools available for import from /dev/
     /// libzetta: ZpoolEngine::available()
     pub async fn list_importable_pools(&self) -> Result<Vec<ImportablePool>, ZfsError> {
-        let pools = self.zpool_engine.available()
+        let pools = self
+            .zpool_engine
+            .available()
             .map_err(|e| format!("Failed to list importable pools: {}", e))?;
 
-        Ok(pools.into_iter().map(|p| ImportablePool {
-            name: p.name().clone(),
-            health: format!("{:?}", p.health()),
-        }).collect())
+        Ok(pools
+            .into_iter()
+            .map(|p| ImportablePool {
+                name: p.name().clone(),
+                health: format!("{:?}", p.health()),
+            })
+            .collect())
     }
 
     /// List pools available for import from a specific directory
     /// libzetta: ZpoolEngine::available_in_dir()
-    pub async fn list_importable_pools_from_dir(&self, dir: &str) -> Result<Vec<ImportablePool>, ZfsError> {
-        let pools = self.zpool_engine.available_in_dir(PathBuf::from(dir))
+    pub async fn list_importable_pools_from_dir(
+        &self,
+        dir: &str,
+    ) -> Result<Vec<ImportablePool>, ZfsError> {
+        let pools = self
+            .zpool_engine
+            .available_in_dir(PathBuf::from(dir))
             .map_err(|e| format!("Failed to list importable pools from {}: {}", dir, e))?;
 
-        Ok(pools.into_iter().map(|p| ImportablePool {
-            name: p.name().clone(),
-            health: format!("{:?}", p.health()),
-        }).collect())
+        Ok(pools
+            .into_iter()
+            .map(|p| ImportablePool {
+                name: p.name().clone(),
+                health: format!("{:?}", p.health()),
+            })
+            .collect())
     }
 
     /// Import a pool from /dev/
     /// libzetta: ZpoolEngine::import()
     pub async fn import_pool(&self, name: &str) -> Result<(), ZfsError> {
-        self.zpool_engine.import(name)
+        self.zpool_engine
+            .import(name)
             .map_err(|e| format!("Failed to import pool: {}", e))?;
 
         Ok(())
@@ -202,48 +254,149 @@ impl ZfsManager {
     /// Import a pool from a specific directory
     /// libzetta: ZpoolEngine::import_from_dir()
     pub async fn import_pool_from_dir(&self, name: &str, dir: &str) -> Result<(), ZfsError> {
-        self.zpool_engine.import_from_dir(name, PathBuf::from(dir))
+        self.zpool_engine
+            .import_from_dir(name, PathBuf::from(dir))
             .map_err(|e| format!("Failed to import pool from {}: {}", dir, e))?;
 
         Ok(())
     }
 
     /// Import a pool with a new name (rename on import)
-    /// CLI-based: `zpool import old_name new_name`
-    /// Note: libzetta doesn't expose rename on import, so we use CLI directly
-    pub async fn import_pool_with_name(&self, name: &str, new_name: &str, dir: Option<&str>) -> Result<(), ZfsError> {
-        use std::process::Command;
+    /// FFI implementation using libzfs-sys zpool_import()
+    ///
+    /// # Arguments
+    /// * `name` - Original pool name to find for import
+    /// * `new_name` - New name to assign during import
+    /// * `dir` - Optional device directory to search
+    ///
+    /// # ZFS C API
+    /// ```c
+    /// int zpool_import(libzfs_handle_t *hdl, nvlist_t *config,
+    ///                  const char *newname, char *altroot)
+    /// ```
+    pub async fn import_pool_with_name(
+        &self,
+        name: &str,
+        new_name: &str,
+        dir: Option<&str>,
+    ) -> Result<(), ZfsError> {
+        // Input validation - check for null bytes
+        let c_poolname = CString::new(name)
+            .map_err(|_| format!("Invalid pool name '{}': contains null byte", name))?;
+        let c_newname = CString::new(new_name)
+            .map_err(|_| format!("Invalid new name '{}': contains null byte", new_name))?;
 
-        let mut cmd = Command::new("zpool");
-        cmd.arg("import");
+        // Optional directory path
+        let c_dir = dir
+            .map(|d| {
+                CString::new(d)
+                    .map_err(|_| format!("Invalid directory '{}': contains null byte", d))
+            })
+            .transpose()?;
 
-        // Add directory if specified
-        if let Some(d) = dir {
-            cmd.arg("-d").arg(d);
+        // Initialize libzfs handle directly (Libzfs::raw is private)
+        let hdl = unsafe { libzfs_init() };
+        if hdl.is_null() {
+            return Err("Failed to initialize libzfs handle".to_string());
         }
 
-        // old_name new_name
-        cmd.arg(name).arg(new_name);
+        // RAII guard for cleanup - libzfs_fini() called on drop
+        struct HandleGuard(*mut libzfs_sys::libzfs_handle_t);
+        impl Drop for HandleGuard {
+            fn drop(&mut self) {
+                unsafe { libzfs_fini(self.0) }
+            }
+        }
+        let _guard = HandleGuard(hdl);
 
-        let output = cmd.output()
-            .map_err(|e| format!("Failed to execute zpool import: {}", e))?;
+        // Build importargs with poolname filter
+        let mut args = import_args();
+        args.poolname = c_poolname.as_ptr() as *mut _;
 
-        if output.status.success() {
+        // Set directory search path if provided
+        // dir_ptr must live as long as args is used, so declare it here
+        let mut dir_ptr: *mut i8 = c_dir
+            .as_ref()
+            .map(|d| d.as_ptr() as *mut i8)
+            .unwrap_or(ptr::null_mut());
+        if c_dir.is_some() {
+            args.path = &mut dir_ptr as *mut *mut _;
+            args.paths = 1;
+        }
+
+        // Search for importable pools
+        let pools_nvl = unsafe { zpool_search_import(hdl, &mut args) };
+
+        if pools_nvl.is_null() {
+            return Err(format!(
+                "Pool '{}' not found for import{}",
+                name,
+                dir.map(|d| format!(" in directory '{}'", d))
+                    .unwrap_or_default()
+            ));
+        }
+
+        // Extract pool config from nvlist using nvlist_lookup_nvlist
+        // The returned nvlist contains pool name -> pool config pairs
+        let mut config_ptr: *mut nvpair_sys::nvlist_t = ptr::null_mut();
+        let lookup_result = unsafe {
+            nvlist_lookup_nvlist(pools_nvl, c_poolname.as_ptr(), &mut config_ptr)
+        };
+
+        if lookup_result != 0 || config_ptr.is_null() {
+            return Err(format!(
+                "Pool '{}' not found in importable pools (may already be imported)",
+                name
+            ));
+        }
+
+        // Import with new name - the key FFI call!
+        let result = unsafe {
+            zpool_import(
+                hdl,
+                config_ptr,
+                c_newname.as_ptr(), // Pass new name (non-null for rename!)
+                ptr::null_mut(),    // altroot = NULL
+            )
+        };
+
+        if result == 0 {
             Ok(())
         } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            Err(format!("Failed to import pool '{}' as '{}': {}", name, new_name, stderr.trim()))
+            // Get detailed error from libzfs
+            let err_desc = unsafe {
+                let err_ptr = libzfs_error_description(hdl);
+                if !err_ptr.is_null() {
+                    std::ffi::CStr::from_ptr(err_ptr)
+                        .to_string_lossy()
+                        .into_owned()
+                } else {
+                    Self::errno_to_string(result).to_string()
+                }
+            };
+            Err(format!(
+                "Failed to import pool '{}' as '{}': {}",
+                name, new_name, err_desc
+            ))
         }
     }
 
     pub async fn list_datasets(&self, pool: &str) -> Result<Vec<String>, ZfsError> {
-        let datasets = self.zfs_engine.list_filesystems(pool)
+        let datasets = self
+            .zfs_engine
+            .list_filesystems(pool)
             .map_err(|e| format!("Failed to list datasets: {}", e))?;
-        
-        Ok(datasets.into_iter().map(|p| p.to_string_lossy().to_string()).collect())
+
+        Ok(datasets
+            .into_iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect())
     }
 
-    pub async fn create_dataset(&self, dataset: crate::models::CreateDataset) -> Result<(), ZfsError> {
+    pub async fn create_dataset(
+        &self,
+        dataset: crate::models::CreateDataset,
+    ) -> Result<(), ZfsError> {
         let kind = match dataset.kind.as_str() {
             "filesystem" => DatasetKind::Filesystem,
             "volume" => DatasetKind::Volume,
@@ -251,8 +404,10 @@ impl ZfsManager {
         };
 
         // Destructure the entire struct to own all fields
-        let crate::models::CreateDataset { name, properties, .. } = dataset;
-        
+        let crate::models::CreateDataset {
+            name, properties, ..
+        } = dataset;
+
         let request = CreateDatasetRequest::builder()
             .name(PathBuf::from(&name))
             .kind(kind)
@@ -260,21 +415,23 @@ impl ZfsManager {
             .build()
             .map_err(|e| format!("Failed to build dataset request: {}", e))?;
 
-        self.zfs_engine.create(request)
+        self.zfs_engine
+            .create(request)
             .map_err(|e| format!("Failed to create dataset: {}", e))?;
 
         Ok(())
     }
 
     pub async fn delete_dataset(&self, name: &str) -> Result<(), ZfsError> {
-        self.zfs_engine.destroy(PathBuf::from(name))
+        self.zfs_engine
+            .destroy(PathBuf::from(name))
             .map_err(|e| format!("Failed to delete dataset: {}", e))?;
 
         Ok(())
     }
 
     /// Recursively delete a dataset and all its children/snapshots
-    /// FROM-SCRATCH: Uses lzc_destroy() FFI for each dataset
+    /// Implementation via libzetta-zfs-core-sys FFI (lzc_destroy)
     ///
     /// Strategy:
     /// 1. Use list() which returns all datasets AND snapshots (uses -t all -r)
@@ -282,18 +439,23 @@ impl ZfsManager {
     /// 3. Sort by depth (deepest first) to ensure children are deleted before parents
     /// 4. Use lzc_destroy() FFI for each
     pub async fn delete_dataset_recursive(&self, name: &str) -> Result<(), ZfsError> {
-        let pool = name.split('/').next()
+        let pool = name
+            .split('/')
+            .next()
             .ok_or_else(|| "Invalid dataset path: no pool".to_string())?;
 
         // list() returns ALL datasets and snapshots in pool (uses -t all -r)
-        let all_items = self.zfs_engine.list(PathBuf::from(pool))
+        let all_items = self
+            .zfs_engine
+            .list(PathBuf::from(pool))
             .map_err(|e| format!("Failed to list datasets: {}", e))?;
 
         // Filter to: target + children (name/) + snapshots on target or children (name@)
         let child_prefix = format!("{}/", name);
         let snap_prefix = format!("{}@", name);
 
-        let mut to_delete: Vec<String> = all_items.into_iter()
+        let mut to_delete: Vec<String> = all_items
+            .into_iter()
             .map(|(_, path)| path.to_string_lossy().to_string())
             .filter(|p| p == name || p.starts_with(&child_prefix) || p.starts_with(&snap_prefix))
             .collect();
@@ -314,7 +476,10 @@ impl ZfsManager {
 
             if result != 0 {
                 let err_msg = Self::errno_to_string(result);
-                return Err(format!("Failed to destroy '{}': {} (errno {})", item, err_msg, result));
+                return Err(format!(
+                    "Failed to destroy '{}': {} (errno {})",
+                    item, err_msg, result
+                ));
             }
         }
 
@@ -322,22 +487,36 @@ impl ZfsManager {
     }
 
     pub async fn list_snapshots(&self, dataset: &str) -> Result<Vec<String>, ZfsError> {
-        let snapshots = self.zfs_engine.list_snapshots(dataset)
+        let snapshots = self
+            .zfs_engine
+            .list_snapshots(dataset)
             .map_err(|e| format!("Failed to list snapshots: {}", e))?;
-        
-        Ok(snapshots.into_iter().map(|p| p.to_string_lossy().to_string()).collect())
+
+        Ok(snapshots
+            .into_iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect())
     }
 
-    pub async fn create_snapshot(&self, dataset: &str, snapshot_name: &str) -> Result<(), ZfsError> {
+    pub async fn create_snapshot(
+        &self,
+        dataset: &str,
+        snapshot_name: &str,
+    ) -> Result<(), ZfsError> {
         let snapshot_path = PathBuf::from(format!("{}@{}", dataset, snapshot_name));
-        
-        self.zfs_engine.snapshot(&[snapshot_path], None)
+
+        self.zfs_engine
+            .snapshot(&[snapshot_path], None)
             .map_err(|e| format!("Failed to create snapshot: {}", e))?;
 
         Ok(())
     }
 
-    pub async fn delete_snapshot(&self, dataset: &str, snapshot_name: &str) -> Result<(), ZfsError> {
+    pub async fn delete_snapshot(
+        &self,
+        dataset: &str,
+        snapshot_name: &str,
+    ) -> Result<(), ZfsError> {
         let full_snapshot_name = format!("{}@{}", dataset, snapshot_name);
 
         // Verify snapshot exists before attempting deletion
@@ -348,20 +527,23 @@ impl ZfsManager {
         }
 
         let snapshot_path = PathBuf::from(&full_snapshot_name);
-        self.zfs_engine.destroy_snapshots(&[snapshot_path], libzetta::zfs::DestroyTiming::RightNow)
+        self.zfs_engine
+            .destroy_snapshots(&[snapshot_path], libzetta::zfs::DestroyTiming::RightNow)
             .map_err(|e| format!("Failed to delete snapshot: {}", e))?;
 
         Ok(())
     }
 
     // =========================================================================
-    // Dataset Properties Operations (MF-002 Phase 2)
+    // Dataset Properties Operations
     // =========================================================================
 
     /// Get all properties of a dataset (filesystem, volume, or snapshot)
     /// libzetta: ZfsEngine::read_properties()
     pub async fn get_dataset_properties(&self, name: &str) -> Result<DatasetProperties, ZfsError> {
-        let props = self.zfs_engine.read_properties(PathBuf::from(name))
+        let props = self
+            .zfs_engine
+            .read_properties(PathBuf::from(name))
             .map_err(|e| format!("Failed to get dataset properties: {}", e))?;
 
         Ok(DatasetProperties::from_libzetta(name.to_string(), props))
@@ -370,15 +552,23 @@ impl ZfsManager {
     /// Set a property on a dataset
     /// **EXPERIMENTAL**: Uses CLI (`zfs set`) as libzetta/libzfs FFI lacks property setting.
     /// Validates property names against safe patterns to prevent injection.
-    pub async fn set_dataset_property(&self, name: &str, property: &str, value: &str) -> Result<(), ZfsError> {
+    pub async fn set_dataset_property(
+        &self,
+        name: &str,
+        property: &str,
+        value: &str,
+    ) -> Result<(), ZfsError> {
         // Validate property name (alphanumeric, underscore, colon for user props)
         if !Self::is_valid_property_name(property) {
             return Err(format!("Invalid property name: {}", property));
         }
 
         // Validate dataset name exists
-        if !self.zfs_engine.exists(PathBuf::from(name))
-            .map_err(|e| format!("Failed to check dataset: {}", e))? {
+        if !self
+            .zfs_engine
+            .exists(PathBuf::from(name))
+            .map_err(|e| format!("Failed to check dataset: {}", e))?
+        {
             return Err(format!("Dataset '{}' does not exist", name));
         }
 
@@ -408,17 +598,19 @@ impl ZfsManager {
             return false;
         }
         // Rest: lowercase, digits, underscore, colon (for user:prop format)
-        name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == ':')
+        name.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == ':')
     }
 
     // =========================================================================
-    // Scrub Operations (MF-001 Phase 2)
+    // Scrub Operations
     // =========================================================================
 
     /// Start or resume a scrub on the pool
     /// libzetta: ZpoolEngine::scrub()
     pub async fn start_scrub(&self, pool: &str) -> Result<(), ZfsError> {
-        self.zpool_engine.scrub(pool)
+        self.zpool_engine
+            .scrub(pool)
             .map_err(|e| format!("Failed to start scrub: {}", e))?;
         Ok(())
     }
@@ -426,7 +618,8 @@ impl ZfsManager {
     /// Pause an active scrub
     /// libzetta: ZpoolEngine::pause_scrub()
     pub async fn pause_scrub(&self, pool: &str) -> Result<(), ZfsError> {
-        self.zpool_engine.pause_scrub(pool)
+        self.zpool_engine
+            .pause_scrub(pool)
             .map_err(|e| format!("Failed to pause scrub: {}", e))?;
         Ok(())
     }
@@ -434,33 +627,41 @@ impl ZfsManager {
     /// Stop/cancel a scrub
     /// libzetta: ZpoolEngine::stop_scrub()
     pub async fn stop_scrub(&self, pool: &str) -> Result<(), ZfsError> {
-        self.zpool_engine.stop_scrub(pool)
+        self.zpool_engine
+            .stop_scrub(pool)
             .map_err(|e| format!("Failed to stop scrub: {}", e))?;
         Ok(())
     }
 
     /// Get scrub status from pool info
-    /// FROM-SCRATCH IMPLEMENTATION using libzfs FFI bindings
-    /// Bypasses libzetta limitation by accessing pool config nvlist directly.
+    /// Implementation via libzfs FFI bindings (bypasses libzetta limitation)
+    /// Accesses pool config nvlist directly.
     /// Extracts scan_stats array per pool_scan_stat_t in sys/fs/zfs.h
     pub async fn get_scrub_status(&self, pool: &str) -> Result<ScrubStatus, ZfsError> {
         // Guard against libzetta panic: check pool exists before calling status()
         // libzetta's status() has a bug where it panics instead of returning error
-        if !self.zpool_engine.exists(pool).map_err(|e| format!("Failed to check pool existence: {}", e))? {
+        if !self
+            .zpool_engine
+            .exists(pool)
+            .map_err(|e| format!("Failed to check pool existence: {}", e))?
+        {
             return Err(format!("Pool '{}' not found", pool));
         }
 
         // Get pool health via libzetta (still useful for that)
         let status_options = libzetta::zpool::open3::StatusOptions::default();
-        let zpool_status = self.zpool_engine.status(pool, status_options)
+        let zpool_status = self
+            .zpool_engine
+            .status(pool, status_options)
             .map_err(|e| format!("Failed to get pool status: {}", e))?;
 
         let pool_health = format!("{:?}", zpool_status.health());
         let errors = zpool_status.errors().clone();
 
-        // FROM-SCRATCH: Use libzfs to get actual scan stats from pool config
+        // Use libzfs FFI to get actual scan stats from pool config
         let mut libzfs = Libzfs::new();
-        let zpool = libzfs.pool_by_name(pool)
+        let zpool = libzfs
+            .pool_by_name(pool)
             .ok_or_else(|| format!("Pool '{}' not found via libzfs", pool))?;
 
         // Get pool config nvlist
@@ -469,7 +670,8 @@ impl ZfsManager {
         // scan_stats is inside vdev_tree (nvroot) per ZFS docs:
         // nvlist_lookup_uint64_array(nvroot, ZPOOL_CONFIG_SCAN_STATS, &stats, &nelem)
         // Try vdev_tree first, fall back to pool config root
-        let scan_stats = config.lookup_nv_list("vdev_tree")
+        let scan_stats = config
+            .lookup_nv_list("vdev_tree")
             .and_then(|vdev_tree| vdev_tree.lookup_uint64_array("scan_stats"))
             .or_else(|_| config.lookup_uint64_array("scan_stats"));
 
@@ -517,12 +719,11 @@ impl ZfsManager {
     }
 
     // =========================================================================
-    // Snapshot Clone/Promote Operations (MF-003 Phase 3)
-    // FROM-SCRATCH IMPLEMENTATION using libzetta-zfs-core-sys FFI
+    // Snapshot Clone/Promote Operations
     // =========================================================================
 
     /// Clone a snapshot to create a new writable dataset
-    /// FROM-SCRATCH: Uses lzc_clone() FFI directly (libzetta doesn't expose this)
+    /// Implementation via libzetta-zfs-core-sys FFI (lzc_clone)
     ///
     /// # Arguments
     /// * `snapshot` - Source snapshot path (e.g., "tank/data@snap1")
@@ -530,25 +731,34 @@ impl ZfsManager {
     pub async fn clone_snapshot(&self, snapshot: &str, target: &str) -> Result<(), ZfsError> {
         // Validate snapshot path format (must contain @)
         if !snapshot.contains('@') {
-            return Err(format!("Invalid snapshot path '{}': must be dataset@snapshot", snapshot));
+            return Err(format!(
+                "Invalid snapshot path '{}': must be dataset@snapshot",
+                snapshot
+            ));
         }
 
         // Validate target doesn't contain @ (must be dataset, not snapshot)
         if target.contains('@') {
-            return Err(format!("Invalid target '{}': clone target must be a dataset path, not a snapshot", target));
+            return Err(format!(
+                "Invalid target '{}': clone target must be a dataset path, not a snapshot",
+                target
+            ));
         }
 
         // Verify snapshot exists using libzetta
-        if !self.zfs_engine.exists(PathBuf::from(snapshot))
-            .map_err(|e| format!("Failed to check snapshot: {}", e))? {
+        if !self
+            .zfs_engine
+            .exists(PathBuf::from(snapshot))
+            .map_err(|e| format!("Failed to check snapshot: {}", e))?
+        {
             return Err(format!("Snapshot '{}' does not exist", snapshot));
         }
 
         // Convert to C strings for FFI
-        let c_target = CString::new(target)
-            .map_err(|_| "Invalid target path: contains null byte")?;
-        let c_origin = CString::new(snapshot)
-            .map_err(|_| "Invalid snapshot path: contains null byte")?;
+        let c_target =
+            CString::new(target).map_err(|_| "Invalid target path: contains null byte")?;
+        let c_origin =
+            CString::new(snapshot).map_err(|_| "Invalid snapshot path: contains null byte")?;
 
         // Call lzc_clone(fsname, origin, props)
         // fsname = target clone path
@@ -558,19 +768,23 @@ impl ZfsManager {
             lzc_clone(
                 c_target.as_ptr(),
                 c_origin.as_ptr(),
-                ptr::null_mut(),  // No properties
+                ptr::null_mut(), // No properties
             )
         };
 
         if result == 0 {
             Ok(())
         } else {
-            Err(format!("lzc_clone failed with error code {}: {}", result, Self::errno_to_string(result)))
+            Err(format!(
+                "lzc_clone failed with error code {}: {}",
+                result,
+                Self::errno_to_string(result)
+            ))
         }
     }
 
     /// Promote a clone to an independent dataset
-    /// FROM-SCRATCH: Uses lzc_promote() FFI directly (libzetta doesn't expose this)
+    /// Implementation via libzetta-zfs-core-sys FFI (lzc_promote)
     ///
     /// After promotion:
     /// - The clone becomes the parent
@@ -586,18 +800,23 @@ impl ZfsManager {
     pub async fn promote_dataset(&self, clone_path: &str) -> Result<(), ZfsError> {
         // Validate clone path doesn't contain @ (must be dataset, not snapshot)
         if clone_path.contains('@') {
-            return Err(format!("Invalid path '{}': cannot promote a snapshot", clone_path));
+            return Err(format!(
+                "Invalid path '{}': cannot promote a snapshot",
+                clone_path
+            ));
         }
 
         // Verify dataset exists
-        if !self.zfs_engine.exists(PathBuf::from(clone_path))
-            .map_err(|e| format!("Failed to check dataset: {}", e))? {
+        if !self
+            .zfs_engine
+            .exists(PathBuf::from(clone_path))
+            .map_err(|e| format!("Failed to check dataset: {}", e))?
+        {
             return Err(format!("Dataset '{}' does not exist", clone_path));
         }
 
         // Convert to C string
-        let c_path = CString::new(clone_path)
-            .map_err(|_| "Invalid path: contains null byte")?;
+        let c_path = CString::new(clone_path).map_err(|_| "Invalid path: contains null byte")?;
 
         // Buffer for conflicting snapshot name (returned on EEXIST)
         let mut conflict_buf: [i8; 256] = [0; 256];
@@ -623,12 +842,22 @@ impl ZfsManager {
             if conflict_name.is_empty() {
                 Err("Promote failed: snapshot name collision (EEXIST)".to_string())
             } else {
-                Err(format!("Promote failed: snapshot name collision with '{}'", conflict_name))
+                Err(format!(
+                    "Promote failed: snapshot name collision with '{}'",
+                    conflict_name
+                ))
             }
         } else if result == libc::EINVAL {
-            Err(format!("Dataset '{}' is not a clone (no origin property)", clone_path))
+            Err(format!(
+                "Dataset '{}' is not a clone (no origin property)",
+                clone_path
+            ))
         } else {
-            Err(format!("lzc_promote failed with error code {}: {}", result, Self::errno_to_string(result)))
+            Err(format!(
+                "lzc_promote failed with error code {}: {}",
+                result,
+                Self::errno_to_string(result)
+            ))
         }
     }
 
@@ -647,12 +876,11 @@ impl ZfsManager {
     }
 
     // =========================================================================
-    // Rollback Operations (MF-003 Phase 3)
-    // FROM-SCRATCH IMPLEMENTATION using libzetta-zfs-core-sys FFI
+    // Rollback Operations
     // =========================================================================
 
     /// Rollback a dataset to a snapshot
-    /// FROM-SCRATCH: Uses lzc_rollback_to() FFI directly (libzetta doesn't expose this)
+    /// Implementation via libzetta-zfs-core-sys FFI (lzc_rollback_to)
     ///
     /// Safety levels:
     /// - Default: Only allows rollback to most recent snapshot
@@ -678,33 +906,50 @@ impl ZfsManager {
         // Validate: force_destroy_clones requires force_destroy_newer
         if force_destroy_clones && !force_destroy_newer {
             return Err(RollbackError::InvalidRequest(
-                "force_destroy_clones requires force_destroy_newer to be true".to_string()
+                "force_destroy_clones requires force_destroy_newer to be true".to_string(),
             ));
         }
 
         // Validate dataset exists
-        if !self.zfs_engine.exists(PathBuf::from(dataset))
-            .map_err(|e| RollbackError::ZfsError(format!("Failed to check dataset: {}", e)))? {
-            return Err(RollbackError::ZfsError(format!("Dataset '{}' does not exist", dataset)));
+        if !self
+            .zfs_engine
+            .exists(PathBuf::from(dataset))
+            .map_err(|e| RollbackError::ZfsError(format!("Failed to check dataset: {}", e)))?
+        {
+            return Err(RollbackError::ZfsError(format!(
+                "Dataset '{}' does not exist",
+                dataset
+            )));
         }
 
         let full_snapshot = format!("{}@{}", dataset, snapshot);
 
         // Validate snapshot exists
-        if !self.zfs_engine.exists(PathBuf::from(&full_snapshot))
-            .map_err(|e| RollbackError::ZfsError(format!("Failed to check snapshot: {}", e)))? {
-            return Err(RollbackError::ZfsError(format!("Snapshot '{}' does not exist", full_snapshot)));
+        if !self
+            .zfs_engine
+            .exists(PathBuf::from(&full_snapshot))
+            .map_err(|e| RollbackError::ZfsError(format!("Failed to check snapshot: {}", e)))?
+        {
+            return Err(RollbackError::ZfsError(format!(
+                "Snapshot '{}' does not exist",
+                full_snapshot
+            )));
         }
 
         // Get all snapshots for this dataset
-        let all_snapshots = self.list_snapshots(dataset).await
+        let all_snapshots = self
+            .list_snapshots(dataset)
+            .await
             .map_err(RollbackError::ZfsError)?;
 
         // Find target snapshot index and get newer snapshots
         // Note: list_snapshots returns full paths like "tank/data@snap1"
-        let target_idx = all_snapshots.iter()
+        let target_idx = all_snapshots
+            .iter()
             .position(|s| s == &full_snapshot)
-            .ok_or_else(|| RollbackError::ZfsError(format!("Snapshot '{}' not found in list", full_snapshot)))?;
+            .ok_or_else(|| {
+                RollbackError::ZfsError(format!("Snapshot '{}' not found in list", full_snapshot))
+            })?;
 
         // Snapshots after target_idx are newer
         let newer_snapshots: Vec<String> = all_snapshots[target_idx + 1..].to_vec();
@@ -712,8 +957,11 @@ impl ZfsManager {
         // If there are newer snapshots and we're not forcing, check what's blocking
         if !newer_snapshots.is_empty() && !force_destroy_newer {
             return Err(RollbackError::Blocked {
-                message: format!("Cannot rollback to '{}': {} newer snapshot(s) exist",
-                    full_snapshot, newer_snapshots.len()),
+                message: format!(
+                    "Cannot rollback to '{}': {} newer snapshot(s) exist",
+                    full_snapshot,
+                    newer_snapshots.len()
+                ),
                 blocking_snapshots: newer_snapshots,
                 blocking_clones: vec![],
             });
@@ -764,8 +1012,10 @@ impl ZfsManager {
         // If we found blocking clones and we're not forcing clone destruction, error
         if !blocking_clones.is_empty() {
             return Err(RollbackError::Blocked {
-                message: format!("Cannot rollback: {} clone(s) depend on newer snapshots",
-                    blocking_clones.len()),
+                message: format!(
+                    "Cannot rollback: {} clone(s) depend on newer snapshots",
+                    blocking_clones.len()
+                ),
                 blocking_snapshots: newer_snapshots,
                 blocking_clones,
             });
@@ -776,8 +1026,9 @@ impl ZfsManager {
 
         // Destroy clones first (if force_destroy_clones)
         for clone_path in clones_to_destroy {
-            self.delete_dataset(&clone_path).await
-                .map_err(|e| RollbackError::ZfsError(format!("Failed to destroy clone '{}': {}", clone_path, e)))?;
+            self.delete_dataset(&clone_path).await.map_err(|e| {
+                RollbackError::ZfsError(format!("Failed to destroy clone '{}': {}", clone_path, e))
+            })?;
             destroyed_clones.push(clone_path);
         }
 
@@ -788,30 +1039,39 @@ impl ZfsManager {
                 if let Some(at_pos) = snap_path.rfind('@') {
                     let ds = &snap_path[..at_pos];
                     let snap_name = &snap_path[at_pos + 1..];
-                    self.delete_snapshot(ds, snap_name).await
-                        .map_err(|e| RollbackError::ZfsError(format!("Failed to destroy snapshot '{}': {}", snap_path, e)))?;
+                    self.delete_snapshot(ds, snap_name).await.map_err(|e| {
+                        RollbackError::ZfsError(format!(
+                            "Failed to destroy snapshot '{}': {}",
+                            snap_path, e
+                        ))
+                    })?;
                     destroyed_snapshots.push(snap_path.clone());
                 }
             }
         }
 
         // Now perform the actual rollback using lzc_rollback_to
-        let c_fsname = CString::new(dataset)
-            .map_err(|_| RollbackError::ZfsError("Invalid dataset path: contains null byte".to_string()))?;
-        let c_snapname = CString::new(&full_snapshot as &str)
-            .map_err(|_| RollbackError::ZfsError("Invalid snapshot path: contains null byte".to_string()))?;
+        let c_fsname = CString::new(dataset).map_err(|_| {
+            RollbackError::ZfsError("Invalid dataset path: contains null byte".to_string())
+        })?;
+        let c_snapname = CString::new(&full_snapshot as &str).map_err(|_| {
+            RollbackError::ZfsError("Invalid snapshot path: contains null byte".to_string())
+        })?;
 
-        let result = unsafe {
-            lzc_rollback_to(
-                c_fsname.as_ptr(),
-                c_snapname.as_ptr(),
-            )
-        };
+        let result = unsafe { lzc_rollback_to(c_fsname.as_ptr(), c_snapname.as_ptr()) };
 
         if result == 0 {
             Ok(RollbackResult {
-                destroyed_snapshots: if destroyed_snapshots.is_empty() { None } else { Some(destroyed_snapshots) },
-                destroyed_clones: if destroyed_clones.is_empty() { None } else { Some(destroyed_clones) },
+                destroyed_snapshots: if destroyed_snapshots.is_empty() {
+                    None
+                } else {
+                    Some(destroyed_snapshots)
+                },
+                destroyed_clones: if destroyed_clones.is_empty() {
+                    None
+                } else {
+                    Some(destroyed_clones)
+                },
             })
         } else if result == libc::EEXIST {
             // This shouldn't happen if we destroyed newer snapshots, but just in case
@@ -822,18 +1082,20 @@ impl ZfsManager {
             })
         } else if result == libc::EBUSY {
             Err(RollbackError::ZfsError(format!(
-                "Dataset '{}' is busy (mounted with open files or active operations)", dataset
+                "Dataset '{}' is busy (mounted with open files or active operations)",
+                dataset
             )))
         } else {
             Err(RollbackError::ZfsError(format!(
-                "lzc_rollback_to failed with error code {}: {}", result, Self::errno_to_string(result)
+                "lzc_rollback_to failed with error code {}: {}",
+                result,
+                Self::errno_to_string(result)
             )))
         }
     }
 
     // =========================================================================
-    // Send/Receive Operations (MF-005 Replication)
-    // libzetta for send, FROM-SCRATCH FFI for receive
+    // Send/Receive Operations
     // =========================================================================
 
     /// Send a snapshot to a file
@@ -865,8 +1127,11 @@ impl ZfsManager {
         overwrite: bool,
     ) -> Result<u64, ZfsError> {
         // Validate snapshot exists
-        if !self.zfs_engine.exists(PathBuf::from(snapshot))
-            .map_err(|e| format!("Failed to check snapshot: {}", e))? {
+        if !self
+            .zfs_engine
+            .exists(PathBuf::from(snapshot))
+            .map_err(|e| format!("Failed to check snapshot: {}", e))?
+        {
             return Err(format!("Snapshot '{}' does not exist", snapshot));
         }
 
@@ -887,7 +1152,10 @@ impl ZfsManager {
         // NOTE: libzetta send_full/send_incremental do NOT support recursive (-R)
         // If recursive is requested, we must error or fall back
         if recursive {
-            return Err("Recursive send (-R) is not supported by libzetta. Use single snapshot sends.".to_string());
+            return Err(
+                "Recursive send (-R) is not supported by libzetta. Use single snapshot sends."
+                    .to_string(),
+            );
         }
 
         // Build SendFlags from libzetta
@@ -918,24 +1186,23 @@ impl ZfsManager {
             let from_path = if from.contains('@') {
                 from.to_string()
             } else {
-                let dataset = snapshot.split('@').next()
-                    .ok_or("Invalid snapshot path")?;
+                let dataset = snapshot.split('@').next().ok_or("Invalid snapshot path")?;
                 format!("{}@{}", dataset, from)
             };
 
-            self.zfs_engine.send_incremental(
-                PathBuf::from(snapshot),
-                PathBuf::from(&from_path),
-                file,
-                flags,
-            ).map_err(|e| format!("libzetta send_incremental failed: {}", e))?;
+            self.zfs_engine
+                .send_incremental(
+                    PathBuf::from(snapshot),
+                    PathBuf::from(&from_path),
+                    file,
+                    flags,
+                )
+                .map_err(|e| format!("libzetta send_incremental failed: {}", e))?;
         } else {
             // Full send
-            self.zfs_engine.send_full(
-                PathBuf::from(snapshot),
-                file,
-                flags,
-            ).map_err(|e| format!("libzetta send_full failed: {}", e))?;
+            self.zfs_engine
+                .send_full(PathBuf::from(snapshot), file, flags)
+                .map_err(|e| format!("libzetta send_full failed: {}", e))?;
         }
 
         // Get file size
@@ -998,9 +1265,9 @@ impl ZfsManager {
         }
     }
 
-    /// Replicate a snapshot directly to another pool (libzetta send → FFI receive via pipe)
+    /// Replicate a snapshot directly to another pool (libzetta send → CLI receive via pipe)
     /// libzetta: ZfsEngine::send_full() / send_incremental()
-    /// FROM-SCRATCH: lzc_receive() FFI
+    /// Note: Uses CLI zfs receive (lzc_receive too low-level)
     ///
     /// # Arguments
     /// * `snapshot` - Full snapshot path (e.g., "tank/data@snap1")
@@ -1034,8 +1301,11 @@ impl ZfsManager {
         force: bool,
     ) -> Result<String, ZfsError> {
         // Validate snapshot exists
-        if !self.zfs_engine.exists(PathBuf::from(snapshot))
-            .map_err(|e| format!("Failed to check snapshot: {}", e))? {
+        if !self
+            .zfs_engine
+            .exists(PathBuf::from(snapshot))
+            .map_err(|e| format!("Failed to check snapshot: {}", e))?
+        {
             return Err(format!("Snapshot '{}' does not exist", snapshot));
         }
 
@@ -1081,11 +1351,7 @@ impl ZfsManager {
                     flags,
                 )
             } else {
-                engine.send_full(
-                    PathBuf::from(&snapshot_owned),
-                    pipe_write,
-                    flags,
-                )
+                engine.send_full(PathBuf::from(&snapshot_owned), pipe_write, flags)
             }
         });
 
@@ -1109,15 +1375,16 @@ impl ZfsManager {
         recv_cmd.stderr(std::process::Stdio::piped());
 
         // Spawn receive process
-        let recv_child = recv_cmd.spawn()
+        let recv_child = recv_cmd
+            .spawn()
             .map_err(|e| format!("Failed to spawn zfs receive: {}", e))?;
 
         // Wait for send to complete
-        let send_result = send_handle.join()
-            .map_err(|_| "Send thread panicked")?;
+        let send_result = send_handle.join().map_err(|_| "Send thread panicked")?;
 
         // Wait for receive to complete
-        let recv_output = recv_child.wait_with_output()
+        let recv_output = recv_child
+            .wait_with_output()
             .map_err(|e| format!("Failed to wait for zfs receive: {}", e))?;
 
         // Check results
@@ -1135,15 +1402,17 @@ impl ZfsManager {
 
     /// Extract pool name from a dataset/snapshot path
     pub fn get_pool_from_path(path: &str) -> String {
-        path.split('/').next()
+        path.split('/')
+            .next()
             .unwrap_or(path)
-            .split('@').next()
+            .split('@')
+            .next()
             .unwrap_or(path)
             .to_string()
     }
 
     /// Estimate send stream size for a snapshot
-    /// FROM-SCRATCH: Uses lzc_send_space() FFI directly
+    /// Implementation via libzetta-zfs-core-sys FFI (lzc_send_space)
     ///
     /// # Arguments
     /// * `snapshot` - Full snapshot path (e.g., "tank/data@snap1")
@@ -1162,14 +1431,17 @@ impl ZfsManager {
         compressed: bool,
     ) -> Result<u64, ZfsError> {
         // Validate snapshot exists
-        if !self.zfs_engine.exists(PathBuf::from(snapshot))
-            .map_err(|e| format!("Failed to check snapshot: {}", e))? {
+        if !self
+            .zfs_engine
+            .exists(PathBuf::from(snapshot))
+            .map_err(|e| format!("Failed to check snapshot: {}", e))?
+        {
             return Err(format!("Snapshot '{}' does not exist", snapshot));
         }
 
         // Convert to C strings
-        let c_snapshot = CString::new(snapshot)
-            .map_err(|_| "Invalid snapshot path: contains null byte")?;
+        let c_snapshot =
+            CString::new(snapshot).map_err(|_| "Invalid snapshot path: contains null byte")?;
 
         let c_from: Option<CString> = from_snapshot.and_then(|f| {
             if f.contains('@') {
@@ -1207,7 +1479,11 @@ impl ZfsManager {
         if result == 0 {
             Ok(size)
         } else {
-            Err(format!("lzc_send_space failed with error code {}: {}", result, Self::errno_to_string(result)))
+            Err(format!(
+                "lzc_send_space failed with error code {}: {}",
+                result,
+                Self::errno_to_string(result)
+            ))
         }
     }
 }
@@ -1320,7 +1596,10 @@ impl DatasetProperties {
                 record_size: Some(*fs.record_size()),
                 checksum: Some(format!("{}", fs.checksum())),
                 copies: Some(*fs.copies() as u8),
-                mountpoint: fs.mount_point().as_ref().map(|p| p.to_string_lossy().to_string()),
+                mountpoint: fs
+                    .mount_point()
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string()),
                 mounted: Some(*fs.mounted()),
                 atime: Some(*fs.atime()),
                 exec: Some(*fs.exec()),
@@ -1478,7 +1757,7 @@ impl DatasetProperties {
 }
 
 /// Scrub status information
-/// FROM-SCRATCH implementation using libzfs FFI bindings.
+/// Implementation via libzfs FFI bindings.
 /// Extracts real scan progress from pool_scan_stat_t via nvlist.
 pub struct ScrubStatus {
     pub pool_health: String,
@@ -1493,7 +1772,7 @@ pub struct ScrubStatus {
 }
 
 // ============================================================================
-// UNIT TESTS — MC-001 (ZFS Engine)
+// UNIT TESTS
 // ============================================================================
 // NOTE: These tests require ZFS to be installed and running.
 // Tests are structured to document expected behavior.
@@ -1583,10 +1862,7 @@ mod tests {
     /// Expected: raid_type="mirror" creates Mirror variant
     #[test]
     fn test_mirror_vdev() {
-        let disks: Vec<PathBuf> = vec![
-            PathBuf::from("/dev/sda"),
-            PathBuf::from("/dev/sdb"),
-        ];
+        let disks: Vec<PathBuf> = vec![PathBuf::from("/dev/sda"), PathBuf::from("/dev/sdb")];
 
         let vdev = CreateVdevRequest::Mirror(disks.clone());
 
@@ -1602,10 +1878,7 @@ mod tests {
     /// Expected: Returns error message
     #[test]
     fn test_multiple_disks_no_raid_error() {
-        let disks: Vec<PathBuf> = vec![
-            PathBuf::from("/dev/sda"),
-            PathBuf::from("/dev/sdb"),
-        ];
+        let disks: Vec<PathBuf> = vec![PathBuf::from("/dev/sda"), PathBuf::from("/dev/sdb")];
         let raid_type: Option<&str> = None;
 
         // Replicate the error condition
@@ -1636,10 +1909,7 @@ mod tests {
         let snapshot_name = "backup-001";
         let snapshot_path = PathBuf::from(format!("{}@{}", dataset, snapshot_name));
 
-        assert_eq!(
-            snapshot_path.to_string_lossy(),
-            "tank/data@backup-001"
-        );
+        assert_eq!(snapshot_path.to_string_lossy(), "tank/data@backup-001");
     }
 
     // -------------------------------------------------------------------------
