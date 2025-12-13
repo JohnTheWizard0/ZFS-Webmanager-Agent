@@ -1911,8 +1911,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "zfs_webmanager_agent"
-version = "0.5.9"
+name = "zfsreload_agent"
+version = "0.6.0"
 dependencies = [
  "dirs",
  "libc",
