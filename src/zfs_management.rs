@@ -793,8 +793,7 @@ impl ZfsManager {
     ///
     /// # Arguments
     /// * `pool` - Name of the pool to expand
-    /// * `vdev_type` - Type of vdev: "disk", "mirror", "raidz", "raidz2", "raidz3",
-    ///                 "log", "cache", "spare", "special", "dedup"
+    /// * `vdev_type` - Type of vdev: "disk", "mirror", "raidz", "raidz2", "raidz3", "log", "cache", "spare", "special", "dedup"
     /// * `devices` - Device paths (e.g., ["/dev/sdc", "/dev/sdd"])
     /// * `force` - Force add even if devices appear in use
     /// * `check_ashift` - Warn if ashift mismatch (can prevent future vdev removal)

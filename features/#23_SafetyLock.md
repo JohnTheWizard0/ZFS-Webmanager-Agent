@@ -1,5 +1,5 @@
 ACTIVE: #23_SafetyLock
-STATUS: implementing
+STATUS: stable
 DEPENDS: #01_APIFramework
 ---
 
@@ -51,11 +51,23 @@ ZFS version safety mechanism that detects ZFS version at startup and enters "rea
 
 ## Implementation
 - **Detection**: `zfs version` -> `modinfo -F version zfs` -> `/sys/module/zfs/version`
-- **Matching**: Prefix matching ("2.1" matches "2.1.5")
+- **Matching**: Range check (min <= version <= max)
+- **Config**: `settings.json` with `min_zfs_version` and `max_zfs_version`
 - **State**: Memory-only, resets on restart
 
+## Configuration (settings.json)
+```json
+{
+    "safety": {
+        "min_zfs_version": "2.0",
+        "max_zfs_version": "2.2.2"
+    }
+}
+```
+
 ## Files
-- `src/safety.rs` - SafetyManager, version detection
+- `settings.json` - Centralized configuration
+- `src/safety.rs` - SafetyManager, version detection, settings loading
 - `src/models.rs` - ZfsVersionInfo, SafetyState, request/response structs
 - `src/utils.rs` - safety_check filter
 - `src/handlers.rs` - safety_status_handler, safety_override_handler

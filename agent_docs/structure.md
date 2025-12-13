@@ -7,28 +7,26 @@
 ```
 zfs-agent/
 ├── agent_docs/              # AI context files
+│   ├── cli_reference.md     # CLI commands reference
 │   ├── commands.md          # Platform & service commands
 │   ├── structure.md         # This file - project anatomy
 │   └── workflow.md          # Development workflow stages
 ├── features/                # Feature specs and status
+│   ├── archive/             # Merged/archived feature specs
+│   ├── #23_SafetyLock.md    # ZFS version safety mechanism
 │   └── #XY_FeatureName.md   # Template for new features
 ├── _resources/              # Reference documentation
 │   ├── ZFS_documentation/   # OpenZFS programmatic docs (20 files)
-│   ├── BLACKBOARD.md        # Module index, blockers, decisions
-│   ├── CLI_func.md          # CLI-based ZFS functions
-│   ├── ZFS-Features.md      # Feature tracking by category
-│   ├── MC-*.md              # Connector module docs
-│   ├── MF-*.md              # Feature module docs
-│   ├── MI-*.md              # Infrastructure module docs
-│   └── _TEMPLATE_*.md       # Module doc templates
+│   └── ZFS-Features.md      # Feature tracking by category
 ├── src/                     # Rust source code
-│   ├── main.rs              # Entry point, server setup
+│   ├── main.rs              # Entry point, server setup, routes
 │   ├── handlers.rs          # API route handlers
-│   ├── zfs_management.rs    # ZFS operations (libzetta wrapper)
+│   ├── zfs_management.rs    # ZFS operations (libzetta + FFI)
+│   ├── safety.rs            # ZFS version safety lock
 │   ├── auth.rs              # API key authentication
 │   ├── models.rs            # Request/response structs
 │   ├── task_manager.rs      # Async task tracking
-│   └── utils.rs             # Helper functions
+│   └── utils.rs             # Helper functions, filters
 ├── tests/                   # Integration tests
 │   ├── api_*.rs             # Rust API tests
 │   ├── zfs_parcour.sh       # Main integration test runner
@@ -39,6 +37,7 @@ zfs-agent/
 ├── Cargo.toml               # Rust dependencies
 ├── Cargo.lock               # Locked dependency versions
 ├── openapi.yaml             # API specification (OpenAPI 3.0)
+├── settings.json            # Agent configuration (safety settings)
 ├── rust-toolchain.toml      # Rust version pinning
 ├── CLAUDE.md                # Agent instructions
 └── README.md                # Project readme
@@ -48,17 +47,19 @@ zfs-agent/
 
 | Module | Purpose | Entry Point |
 |--------|---------|-------------|
-| API Server | Actix-web REST API | src/main.rs |
-| ZFS Engine | libzetta wrapper + CLI fallback | src/zfs_management.rs |
+| API Server | Warp REST API server | src/main.rs |
+| ZFS Engine | libzetta wrapper + FFI + CLI fallback | src/zfs_management.rs |
 | Handlers | Route logic for pools/datasets/snapshots | src/handlers.rs |
+| Safety | ZFS version validation & lock | src/safety.rs |
 | Auth | API key middleware | src/auth.rs |
 | Task Manager | Async operation tracking | src/task_manager.rs |
 
 ## Dependencies
 
 External (Cargo.toml):
-- `actix-web`: HTTP server framework
+- `warp`: HTTP server framework
 - `libzetta`: ZFS bindings (primary)
+- `libzfs`, `libzfs-sys`: FFI for advanced ZFS operations
 - `serde`: Serialization
 - `tokio`: Async runtime
 
