@@ -1,0 +1,405 @@
+{
+  "version": "0.5.9",
+  "features": [
+    {
+      "name": "List pools",
+      "category": "pool",
+      "implemented": true,
+      "implementation": "libzetta",
+      "endpoint": "GET /v1/pools",
+      "notes": "Returns pool names"
+    },
+    {
+      "name": "Get pool status",
+      "category": "pool",
+      "implemented": true,
+      "implementation": "libzetta",
+      "endpoint": "GET /v1/pools/{name}",
+      "notes": "Health, size, capacity, vdevs"
+    },
+    {
+      "name": "Create pool",
+      "category": "pool",
+      "implemented": true,
+      "implementation": "libzetta",
+      "endpoint": "POST /v1/pools",
+      "notes": "Single disk, mirror, raidz/2/3"
+    },
+    {
+      "name": "Destroy pool",
+      "category": "pool",
+      "implemented": true,
+      "implementation": "libzetta",
+      "endpoint": "DELETE /v1/pools/{name}",
+      "notes": "Force option supported"
+    },
+    {
+      "name": "Scrub pool",
+      "category": "pool",
+      "implemented": true,
+      "implementation": "libzfs",
+      "endpoint": "POST /v1/pools/{name}/scrub",
+      "notes": "Start scrub, progress via libzfs FFI"
+    },
+    {
+      "name": "Get scrub status",
+      "category": "pool",
+      "implemented": true,
+      "implementation": "libzfs",
+      "endpoint": "GET /v1/pools/{name}/scrub",
+      "notes": "Progress via pool_scan_stat_t FFI"
+    },
+    {
+      "name": "Scrub pause",
+      "category": "pool",
+      "implemented": true,
+      "implementation": "libzetta",
+      "endpoint": "POST /v1/pools/{name}/scrub/pause",
+      "notes": "Pause active scrub"
+    },
+    {
+      "name": "Scrub stop",
+      "category": "pool",
+      "implemented": true,
+      "implementation": "libzetta",
+      "endpoint": "POST /v1/pools/{name}/scrub/stop",
+      "notes": "Cancel active scrub"
+    },
+    {
+      "name": "Import pool",
+      "category": "pool",
+      "implemented": true,
+      "implementation": "ffi",
+      "endpoint": "POST /v1/pools/import",
+      "notes": "FFI import, rename option uses CLI"
+    },
+    {
+      "name": "Export pool",
+      "category": "pool",
+      "implemented": true,
+      "implementation": "libzetta",
+      "endpoint": "POST /v1/pools/{name}/export",
+      "notes": "Force option supported"
+    },
+    {
+      "name": "List importable pools",
+      "category": "pool",
+      "implemented": true,
+      "implementation": "libzetta",
+      "endpoint": "GET /v1/pools/importable",
+      "notes": "Discover pools, optional dir"
+    },
+    {
+      "name": "Add vdev",
+      "category": "pool",
+      "implemented": true,
+      "implementation": "ffi",
+      "endpoint": "POST /v1/pools/{name}/vdev",
+      "notes": "Expand pool: mirror, raidz, log, cache, spare, special, dedup"
+    },
+    {
+      "name": "Remove vdev",
+      "category": "pool",
+      "implemented": true,
+      "implementation": "ffi",
+      "endpoint": "DELETE /v1/pools/{name}/vdev/{device}",
+      "notes": "Remove mirror/single disk/log/cache/spare via zpool_vdev_remove() FFI"
+    },
+    {
+      "name": "Clear pool errors",
+      "category": "pool",
+      "implemented": false,
+      "implementation": "planned",
+      "notes": "Reset error counters after repair"
+    },
+    {
+      "name": "Pool properties",
+      "category": "pool",
+      "implemented": false,
+      "implementation": "planned",
+      "notes": "Get/set pool-level props (ashift, autoexpand)"
+    },
+    {
+      "name": "Pool history",
+      "category": "pool",
+      "implemented": false,
+      "implementation": "planned",
+      "notes": "zpool history - command audit log"
+    },
+    {
+      "name": "List datasets",
+      "category": "dataset",
+      "implemented": true,
+      "implementation": "libzetta",
+      "endpoint": "GET /v1/datasets/{pool}",
+      "notes": "Filesystems in pool"
+    },
+    {
+      "name": "Create dataset",
+      "category": "dataset",
+      "implemented": true,
+      "implementation": "libzetta",
+      "endpoint": "POST /v1/datasets",
+      "notes": "Filesystem or volume (zvol)"
+    },
+    {
+      "name": "Delete dataset",
+      "category": "dataset",
+      "implemented": true,
+      "implementation": "libzetta",
+      "endpoint": "DELETE /v1/datasets/{path}",
+      "notes": "Recursive option supported"
+    },
+    {
+      "name": "Get dataset properties",
+      "category": "dataset",
+      "implemented": true,
+      "implementation": "libzetta",
+      "endpoint": "GET /v1/datasets/{path}/properties",
+      "notes": "All standard ZFS properties"
+    },
+    {
+      "name": "Set dataset properties",
+      "category": "dataset",
+      "implemented": true,
+      "implementation": "cli_experimental",
+      "endpoint": "PUT /v1/datasets/{path}/properties",
+      "notes": "CLI fallback (zfs set) - FFI lacks property setting"
+    },
+    {
+      "name": "Promote clone",
+      "category": "dataset",
+      "implemented": true,
+      "implementation": "ffi",
+      "endpoint": "POST /v1/datasets/{path}/promote",
+      "notes": "lzc_promote() FFI"
+    },
+    {
+      "name": "Rollback dataset",
+      "category": "dataset",
+      "implemented": true,
+      "implementation": "ffi",
+      "endpoint": "POST /v1/datasets/{path}/rollback",
+      "notes": "lzc_rollback_to() FFI, 3 safety levels"
+    },
+    {
+      "name": "Rename dataset",
+      "category": "dataset",
+      "implemented": false,
+      "implementation": "planned",
+      "notes": "lzc_rename() available"
+    },
+    {
+      "name": "Mount/unmount dataset",
+      "category": "dataset",
+      "implemented": false,
+      "implementation": "planned",
+      "notes": "No FFI available"
+    },
+    {
+      "name": "Encryption key management",
+      "category": "dataset",
+      "implemented": false,
+      "implementation": "planned",
+      "notes": "zfs load-key/unload-key for encrypted datasets"
+    },
+    {
+      "name": "Bookmarks",
+      "category": "dataset",
+      "implemented": false,
+      "implementation": "planned",
+      "notes": "Lightweight snapshot references for incremental send"
+    },
+    {
+      "name": "List snapshots",
+      "category": "snapshot",
+      "implemented": true,
+      "implementation": "libzetta",
+      "endpoint": "GET /v1/snapshots/{dataset}",
+      "notes": null
+    },
+    {
+      "name": "Create snapshot",
+      "category": "snapshot",
+      "implemented": true,
+      "implementation": "libzetta",
+      "endpoint": "POST /v1/snapshots/{dataset}",
+      "notes": null
+    },
+    {
+      "name": "Delete snapshot",
+      "category": "snapshot",
+      "implemented": true,
+      "implementation": "libzetta",
+      "endpoint": "DELETE /v1/snapshots/{dataset}/{name}",
+      "notes": null
+    },
+    {
+      "name": "Clone snapshot",
+      "category": "snapshot",
+      "implemented": true,
+      "implementation": "ffi",
+      "endpoint": "POST /v1/snapshots/{dataset}/{name}/clone",
+      "notes": "lzc_clone() FFI"
+    },
+    {
+      "name": "Hold/release snapshot",
+      "category": "snapshot",
+      "implemented": false,
+      "implementation": "planned",
+      "notes": "Prevent snapshot deletion (zfs hold/release)"
+    },
+    {
+      "name": "Recursive snapshot",
+      "category": "snapshot",
+      "implemented": false,
+      "implementation": "planned",
+      "notes": "Snapshot all children (zfs snapshot -r)"
+    },
+    {
+      "name": "Snapshot diff",
+      "category": "snapshot",
+      "implemented": false,
+      "implementation": "planned",
+      "notes": "Show changes between snapshots (zfs diff)"
+    },
+    {
+      "name": "Read quota",
+      "category": "property",
+      "implemented": true,
+      "implementation": "libzetta",
+      "endpoint": "GET /v1/datasets/{path}/properties",
+      "notes": "Dataset size limit"
+    },
+    {
+      "name": "Read compression",
+      "category": "property",
+      "implemented": true,
+      "implementation": "libzetta",
+      "endpoint": "GET /v1/datasets/{path}/properties",
+      "notes": "lz4, zstd, gzip, etc."
+    },
+    {
+      "name": "Read reservation",
+      "category": "property",
+      "implemented": true,
+      "implementation": "libzetta",
+      "endpoint": "GET /v1/datasets/{path}/properties",
+      "notes": "Guaranteed space"
+    },
+    {
+      "name": "Read mountpoint",
+      "category": "property",
+      "implemented": true,
+      "implementation": "libzetta",
+      "endpoint": "GET /v1/datasets/{path}/properties",
+      "notes": null
+    },
+    {
+      "name": "Read readonly",
+      "category": "property",
+      "implemented": true,
+      "implementation": "libzetta",
+      "endpoint": "GET /v1/datasets/{path}/properties",
+      "notes": null
+    },
+    {
+      "name": "Read atime",
+      "category": "property",
+      "implemented": true,
+      "implementation": "libzetta",
+      "endpoint": "GET /v1/datasets/{path}/properties",
+      "notes": "Access time tracking"
+    },
+    {
+      "name": "Send snapshot to file",
+      "category": "replication",
+      "implemented": true,
+      "implementation": "libzetta",
+      "endpoint": "POST /v1/snapshots/{dataset}/{snapshot}/send",
+      "notes": "Full/incremental via send_full/send_incremental"
+    },
+    {
+      "name": "Receive from file",
+      "category": "replication",
+      "implemented": true,
+      "implementation": "cli_experimental",
+      "endpoint": "POST /v1/datasets/{path}/receive",
+      "notes": "CLI: lzc_receive too low-level (no stream header parsing)"
+    },
+    {
+      "name": "Replicate to pool",
+      "category": "replication",
+      "implemented": true,
+      "implementation": "hybrid",
+      "endpoint": "POST /v1/replication/{dataset}/{snapshot}",
+      "notes": "libzetta send + CLI receive"
+    },
+    {
+      "name": "Estimate send size",
+      "category": "replication",
+      "implemented": true,
+      "implementation": "ffi",
+      "endpoint": "GET /v1/snapshots/{dataset}/{snapshot}/send-size",
+      "notes": "lzc_send_space() FFI"
+    },
+    {
+      "name": "Task status",
+      "category": "replication",
+      "implemented": true,
+      "endpoint": "GET /v1/tasks/{task_id}",
+      "notes": "Pool busy tracking, 1hr expiry"
+    },
+    {
+      "name": "Incremental send",
+      "category": "replication",
+      "implemented": true,
+      "implementation": "libzetta",
+      "endpoint": "POST /v1/snapshots/{dataset}/{snapshot}/send",
+      "notes": "from_snapshot param for delta"
+    },
+    {
+      "name": "Health check",
+      "category": "system",
+      "implemented": true,
+      "endpoint": "GET /v1/health",
+      "notes": "Version, last action"
+    },
+    {
+      "name": "API documentation",
+      "category": "system",
+      "implemented": true,
+      "endpoint": "GET /v1/docs",
+      "notes": "Swagger UI"
+    },
+    {
+      "name": "Feature discovery",
+      "category": "system",
+      "implemented": true,
+      "endpoint": "GET /v1/features",
+      "notes": "This page"
+    },
+    {
+      "name": "Command execution",
+      "category": "system",
+      "implemented": true,
+      "implementation": "cli_experimental",
+      "endpoint": "POST /v1/command",
+      "notes": "Arbitrary shell commands"
+    },
+    {
+      "name": "Safety lock status",
+      "category": "system",
+      "implemented": true,
+      "endpoint": "GET /v1/safety",
+      "notes": "Check ZFS version approval and lock state"
+    },
+    {
+      "name": "Safety lock override",
+      "category": "system",
+      "implemented": true,
+      "endpoint": "POST /v1/safety",
+      "notes": "Override lock for untested ZFS versions"
+    }
+  ]
+}

@@ -64,6 +64,19 @@ extern "C" {
         nvroot: *mut nvlist_t,
         check_ashift: i32,
     ) -> std::ffi::c_int;
+
+    /// Remove a vdev from an existing pool
+    /// ```c
+    /// int zpool_vdev_remove(zpool_handle_t *zhp, const char *path);
+    /// ```
+    /// - path: Device path or GUID of vdev to remove
+    /// - Returns: 0 on success, non-zero on error
+    /// - Note: Cannot remove raidz/draid vdevs (ZFS limitation)
+    /// - Can remove: mirrors, single disks, cache, log, spare
+    fn zpool_vdev_remove(
+        zhp: *mut zpool_handle_t,
+        path: *const std::ffi::c_char,
+    ) -> std::ffi::c_int;
 }
 
 // libzetta-zfs-core-sys for clone/promote/rollback/send_space/destroy FFI (not exposed by libzetta)
@@ -936,6 +949,130 @@ impl ZfsManager {
             Err(format!(
                 "Failed to add {} vdev to pool '{}': {}",
                 vdev_type, pool, err_desc
+            ))
+        }
+    }
+
+    /// Remove a vdev from an existing pool
+    ///
+    /// # Arguments
+    /// * `pool` - Pool name
+    /// * `device` - Device path (e.g., "/dev/sda") or vdev GUID to remove
+    ///
+    /// # Constraints
+    /// - Cannot remove raidz/draid vdevs (ZFS limitation)
+    /// - Can remove: mirrors, single disks, cache, log, spare
+    /// - Data vdev removal requires evacuation (data migration) - pool must have enough space
+    /// - Removal may be a long-running async operation for data vdevs
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// // Remove a cache device
+    /// zfs.remove_vdev("tank", "/dev/nvme0n1").await?;
+    ///
+    /// // Remove a log device
+    /// zfs.remove_vdev("tank", "/dev/sdb1").await?;
+    /// ```
+    ///
+    /// # ZFS C API
+    /// ```c
+    /// int zpool_vdev_remove(zpool_handle_t *zhp, const char *path)
+    /// ```
+    pub async fn remove_vdev(&self, pool: &str, device: &str) -> Result<(), ZfsError> {
+        // Validate device path - must be absolute path or GUID
+        if !device.starts_with('/') && device.parse::<u64>().is_err() {
+            return Err(format!(
+                "Invalid device '{}': must be absolute path or GUID",
+                device
+            ));
+        }
+
+        // Validate path doesn't contain shell metacharacters (security)
+        if device.starts_with('/') {
+            let dangerous_chars = [';', '|', '&', '$', '`', '(', ')', '{', '}', '[', ']', '<', '>'];
+            if device.chars().any(|c| dangerous_chars.contains(&c)) {
+                return Err(format!(
+                    "Invalid device path '{}': contains dangerous characters",
+                    device
+                ));
+            }
+        }
+
+        // Validate pool exists
+        if !self
+            .zpool_engine
+            .exists(pool)
+            .map_err(|e| format!("Failed to check pool existence: {}", e))?
+        {
+            return Err(format!("Pool '{}' does not exist", pool));
+        }
+
+        // Convert strings to CString
+        let c_pool = CString::new(pool)
+            .map_err(|_| format!("Invalid pool name '{}': contains null byte", pool))?;
+        let c_device = CString::new(device)
+            .map_err(|_| format!("Invalid device '{}': contains null byte", device))?;
+
+        // Initialize libzfs handle
+        let hdl = unsafe { libzfs_init() };
+        if hdl.is_null() {
+            return Err("Failed to initialize libzfs handle".to_string());
+        }
+
+        // RAII guard for libzfs handle cleanup
+        struct LibzfsGuard(*mut libzfs_sys::libzfs_handle_t);
+        impl Drop for LibzfsGuard {
+            fn drop(&mut self) {
+                unsafe { libzfs_fini(self.0) }
+            }
+        }
+        let _libzfs_guard = LibzfsGuard(hdl);
+
+        // Open pool handle
+        let zhp = unsafe { zpool_open_canfail(hdl, c_pool.as_ptr()) };
+        if zhp.is_null() {
+            let err_desc = unsafe {
+                let err_ptr = libzfs_error_description(hdl);
+                if !err_ptr.is_null() {
+                    std::ffi::CStr::from_ptr(err_ptr)
+                        .to_string_lossy()
+                        .into_owned()
+                } else {
+                    "pool not found".to_string()
+                }
+            };
+            return Err(format!("Failed to open pool '{}': {}", pool, err_desc));
+        }
+
+        // RAII guard for pool handle cleanup
+        struct PoolGuard(*mut zpool_handle_t);
+        impl Drop for PoolGuard {
+            fn drop(&mut self) {
+                unsafe { zpool_close(self.0) }
+            }
+        }
+        let _pool_guard = PoolGuard(zhp);
+
+        // Call zpool_vdev_remove
+        let result = unsafe { zpool_vdev_remove(zhp, c_device.as_ptr()) };
+
+        if result == 0 {
+            Ok(())
+        } else {
+            // Get detailed error from libzfs
+            let err_desc = unsafe {
+                let err_ptr = libzfs_error_description(hdl);
+                if !err_ptr.is_null() {
+                    std::ffi::CStr::from_ptr(err_ptr)
+                        .to_string_lossy()
+                        .into_owned()
+                } else {
+                    Self::errno_to_string(result).to_string()
+                }
+            };
+            Err(format!(
+                "Failed to remove device '{}' from pool '{}': {}",
+                device, pool, err_desc
             ))
         }
     }

@@ -1,5 +1,5 @@
 ACTIVE: #07_PoolVdevOps
-STATUS: done
+STATUS: complete (add + remove done)
 DEPENDS: #04_PoolCRUD
 ---
 
@@ -9,15 +9,32 @@ Vdev management: add and remove devices from pools.
 ## Endpoints
 | Method | Path | Status | Description |
 |--------|------|--------|-------------|
-| DELETE | `/v1/pools/{name}/vdev/{device}` | done | Remove vdev |
 | POST | `/v1/pools/{name}/vdev` | **done** | Add vdev |
+| DELETE | `/v1/pools/{name}/vdev/{device}` | **done** | Remove vdev |
 
-## Remove Vdev (done)
-Implementation: libzetta `ZpoolEngine::remove()`
+## Remove Vdev (done - 2025-12-13)
+Implementation: **Custom FFI** via `zpool_vdev_remove()` with libzfs handle management
 
-Constraints:
-- Cannot remove raidz/draid vdevs
+ZFS Constraints:
+- Cannot remove raidz/draid vdevs (ZFS limitation)
 - Can remove: mirrors, single disks, cache, log, spare
+- Removal may require evacuation (data migration) for data vdevs
+
+Security validations:
+- Pool name validation (must exist)
+- Device path validation (absolute path or GUID, no shell metacharacters)
+- RAII guards for memory management (pool handle, libzfs handle)
+
+API Usage:
+```bash
+# Remove a cache device
+curl -X DELETE "http://localhost:9876/v1/pools/tank/vdev/dev/nvme0n1" -H "X-API-Key: $KEY"
+
+# Remove a log device
+curl -X DELETE "http://localhost:9876/v1/pools/tank/vdev/dev/sdb1" -H "X-API-Key: $KEY"
+```
+
+Note: Device path in URL omits leading `/` (e.g., `/dev/sda` → `dev/sda`)
 
 ## Add Vdev (done - 2025-12-13)
 Implementation: **Custom FFI** via `zpool_add()` with manual nvlist construction
@@ -124,9 +141,9 @@ root (type="root")
 3. Add `add_vdev()` method to ZfsManager
 4. Create handler and models for API endpoint
 
-## Implementation Progress (2025-12-13)
+## Implementation Progress
 
-### Completed
+### Add Vdev (2025-12-13)
 - [x] Research libzetta for add_vdev support
 - [x] Research web for Rust ZFS FFI patterns
 - [x] Decide implementation approach → **Custom FFI**
@@ -141,26 +158,45 @@ root (type="root")
 - [x] Add integration tests (VD1-VD5 short, VD1-VD10 long)
 - [x] Code compiles successfully (`cargo build`)
 
+### Remove Vdev (2025-12-13)
+- [x] Add FFI binding for zpool_vdev_remove
+- [x] Implement ZfsManager::remove_vdev() method
+- [x] Add models (RemoveVdevResponse)
+- [x] Add handler: DELETE /v1/pools/{name}/vdev/{device}
+- [x] Route uses path::tail() for device paths with slashes
+- [x] Update OpenAPI spec with RemoveVdevResponse schema
+- [x] Add integration tests (VD6-VD10 short tests)
+- [x] Code compiles successfully (`cargo build`)
+
 ### Files Modified
 | File | Changes |
 |------|---------|
-| `src/zfs_management.rs` | FFI bindings (`zpool_add`), nvlist builders (`build_disk_nvlist`, `build_vdev_nvlist`, `build_root_nvlist`), `add_vdev()` method, RAII guards (`NvlistGuard`, `PoolGuard`, `LibzfsGuard`) |
-| `src/models.rs` | `AddVdevRequest`, `AddVdevResponse`, `default_true()` helper |
-| `src/handlers.rs` | `add_vdev_handler()` |
-| `src/main.rs` | Route: `POST /v1/pools/{name}/vdev` |
-| `openapi.yaml` | Schemas + endpoint documentation |
-| `tests/zfs_stress_b_short.sh` | VD1-VD5 error case tests |
+| `src/zfs_management.rs` | FFI bindings (`zpool_add`, `zpool_vdev_remove`), nvlist builders, `add_vdev()` + `remove_vdev()` methods, RAII guards |
+| `src/models.rs` | `AddVdevRequest`, `AddVdevResponse`, `RemoveVdevResponse` |
+| `src/handlers.rs` | `add_vdev_handler()`, `remove_vdev_handler()` |
+| `src/main.rs` | Routes: `POST /v1/pools/{name}/vdev`, `DELETE /v1/pools/{name}/vdev/{device}` |
+| `openapi.yaml` | Schemas + endpoint documentation for both operations |
+| `tests/zfs_stress_b_short.sh` | VD1-VD10 (add VD1-5, remove VD6-10) |
 | `tests/zfs_stress_b_long.sh` | VD1-VD10 comprehensive tests |
 
 ## Test Results (2025-12-13)
 
 ### Short Tests (`zfs_stress_b_short.sh`)
-**Result: ALL PASS (5/5 vdev tests)**
+**Result: ALL PASS (10/10 vdev tests)**
+
+Add Vdev Tests (VD1-VD5):
 - VD1: Pool does not exist ✓
 - VD2: Invalid device path ✓
 - VD3: Invalid vdev_type ✓
 - VD4: Device already in pool ✓
 - VD5: Pool status after errors ✓
+
+Remove Vdev Tests (VD6-VD10):
+- VD6: Remove from non-existent pool ✓
+- VD7: Remove non-existent device ✓
+- VD8: Remove with dangerous chars in path ✓
+- VD9: Remove with relative path ✓
+- VD10: Pool status after errors ✓
 
 ### Long Tests (`zfs_stress_b_long.sh`)
 **Result: 70 PASS, 1 FAIL (EI4 - pre-existing, unrelated)**

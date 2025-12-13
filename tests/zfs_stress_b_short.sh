@@ -7,7 +7,8 @@
 #
 # TESTS INCLUDED:
 #   PO1-PO5: Pool creation/destruction edge cases
-#   VD1-VD5: Vdev operations (basic error cases)
+#   VD1-VD5: Add vdev error cases
+#   VD6-VD10: Remove vdev error cases
 #   SC1-SC2: Scrub basic edge cases
 #   EI1-EI3: Export/Import basic edge cases
 #   RE1-RE5: Replication basic edge cases
@@ -298,6 +299,85 @@ test_vdev_verify_pool_status() {
         health=$(json_field "$response" "health")
         log_info "Pool health: $health"
         # Case-insensitive comparison (API returns "Online", zpool returns "ONLINE")
+        if [[ "${health^^}" == "ONLINE" ]]; then
+            log_pass
+        else
+            log_fail "Pool health is $health, expected ONLINE/Online"
+        fi
+    else
+        log_fail "$(json_field "$response" "message")"
+    fi
+}
+
+# ==============================================================================
+# TEST B2b: Remove Vdev Operations (VD6-VD10)
+# ==============================================================================
+
+test_remove_vdev_nonexistent_pool() {
+    log_header "VD6: REMOVE VDEV FROM NON-EXISTENT POOL"
+    log_test "DELETE /pools/fake_pool_xyz/vdev/dev/sda"
+    local response
+    response=$(api DELETE "/v1/pools/fake_pool_xyz/vdev/dev/sda")
+    if is_error "$response"; then
+        log_expect_error "$(json_field "$response" "message")"
+        log_pass
+    else
+        log_fail "Should error for nonexistent pool"
+    fi
+}
+
+test_remove_vdev_nonexistent_device() {
+    log_header "VD7: REMOVE NON-EXISTENT DEVICE FROM POOL"
+    log_test "DELETE /pools/$STRESS_POOL/vdev/dev/nonexistent_device_xyz"
+    local response
+    response=$(api DELETE "/v1/pools/$STRESS_POOL/vdev/dev/nonexistent_device_xyz")
+    if is_error "$response"; then
+        log_expect_error "$(json_field "$response" "message")"
+        log_pass
+    else
+        log_fail "Should error for non-existent device"
+    fi
+}
+
+test_remove_vdev_invalid_path() {
+    log_header "VD8: REMOVE VDEV WITH INVALID PATH (DANGEROUS CHARS)"
+    log_test "DELETE /pools/$STRESS_POOL/vdev with shell metacharacters"
+    local response
+    # Using a path with dangerous characters - the API should reject this
+    response=$(api DELETE "/v1/pools/$STRESS_POOL/vdev/dev/sda;rm%20-rf")
+    if is_error "$response"; then
+        log_expect_error "$(json_field "$response" "message")"
+        log_pass
+    else
+        log_fail "Should error for path with dangerous characters"
+    fi
+}
+
+test_remove_vdev_relative_path() {
+    log_header "VD9: REMOVE VDEV WITH RELATIVE PATH"
+    log_test "DELETE with non-absolute path (should fail)"
+    local response
+    # The API reconstructs the path with leading /, so this becomes /sda which is not absolute device path
+    # Actually the path becomes "/sda" which starts with /, but is not a valid device
+    # This should fail because /sda doesn't exist
+    response=$(api DELETE "/v1/pools/$STRESS_POOL/vdev/sda")
+    if is_error "$response"; then
+        log_expect_error "$(json_field "$response" "message")"
+        log_pass
+    else
+        log_fail "Should error for relative/invalid device path"
+    fi
+}
+
+test_remove_vdev_verify_pool_status() {
+    log_header "VD10: VERIFY POOL STATUS AFTER REMOVE VDEV ATTEMPTS"
+    log_test "GET /pools/$STRESS_POOL (verify still healthy after error cases)"
+    local response
+    response=$(api GET "/v1/pools/$STRESS_POOL")
+    if is_success "$response"; then
+        local health
+        health=$(json_field "$response" "health")
+        log_info "Pool health: $health"
         if [[ "${health^^}" == "ONLINE" ]]; then
             log_pass
         else
@@ -669,12 +749,19 @@ main() {
     test_pool_raid_types
     test_pool_destroy_nonexistent
 
-    # Vdev operations VD1-VD5 (error cases only - adding real vdevs is destructive)
+    # Vdev operations VD1-VD5 (add vdev error cases)
     test_vdev_nonexistent_pool
     test_vdev_invalid_device
     test_vdev_invalid_type
     test_vdev_device_in_pool
     test_vdev_verify_pool_status
+
+    # Remove vdev operations VD6-VD10 (error cases)
+    test_remove_vdev_nonexistent_pool
+    test_remove_vdev_nonexistent_device
+    test_remove_vdev_invalid_path
+    test_remove_vdev_relative_path
+    test_remove_vdev_verify_pool_status
 
     # Scrub SC1-SC2
     test_scrub_nonexistent_pool

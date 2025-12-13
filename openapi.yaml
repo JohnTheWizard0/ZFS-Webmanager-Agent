@@ -4,9 +4,29 @@ info:
   description: |
     RESTful API for managing ZFS pools, datasets, and snapshots.
 
+    ## ZFS Feature Coverage
+
+    **41 implemented** / 52 total features (79% coverage)
+
+    | Category | Implemented | Planned |
+    |----------|-------------|---------|
+    | Pool Operations | 12 | 4 |
+    | Dataset Operations | 7 | 4 |
+    | Snapshot Operations | 4 | 3 |
+    | Properties | 6 | 0 |
+    | Replication | 6 | 0 |
+    | System | 6 | 0 |
+
+    **Live feature list**: `GET /v1/features` or `GET /v1/features?format=json`
+
+    **Data source**: `features.json` (editable without recompile)
+
     ## Authentication
-    All endpoints (except `/v1/health`, `/v1/docs`, `/v1/features`) require an API key passed via the `X-API-Key` header.
+    All endpoints (except `/v1/health`, `/v1/docs`, `/v1/features`, `/v1/safety`) require an API key via `X-API-Key` header.
     The API key is generated on first run and stored in `~/.zfs_webmanager/api_key`.
+
+    ## Safety Lock
+    The API includes a safety lock for untested ZFS versions. Check status with `GET /v1/safety`.
 
     ## Error Handling
     All endpoints return JSON with a `status` field. On error:
@@ -15,13 +35,13 @@ info:
     ```
 
     ## Implementation Methods
-    Different features use different implementation approaches:
     - **libzetta**: High-level Rust ZFS bindings
-    - **FFI**: Direct `lzc_*` function calls (FROM-SCRATCH implementations)
-    - **CLI-BASED**: Falls back to `zfs`/`zpool` commands (marked as experimental)
-    - **HYBRID**: Combination (e.g., libzetta send + CLI receive)
+    - **ffi**: Direct `lzc_*` function calls (FROM-SCRATCH implementations)
+    - **libzfs**: Uses libzfs FFI bindings directly
+    - **cli_experimental**: Falls back to `zfs`/`zpool` commands
+    - **hybrid**: Combination (e.g., libzetta send + CLI receive)
 
-    Features using CLI are clearly marked in their descriptions.
+    Features using CLI are marked in their descriptions.
   version: 0.5.8
   contact:
     name: ZFS Agent
@@ -256,6 +276,31 @@ components:
         - pool
         - vdev_type
         - devices
+        - message
+
+    RemoveVdevResponse:
+      type: object
+      description: Response after successfully removing a vdev
+      properties:
+        status:
+          type: string
+          example: success
+        pool:
+          type: string
+          description: Pool name
+          example: tank
+        device:
+          type: string
+          description: Device path that was removed
+          example: "/dev/sdc"
+        message:
+          type: string
+          description: Human-readable message
+          example: "Device '/dev/sdc' removed from pool 'tank' successfully"
+      required:
+        - status
+        - pool
+        - device
         - message
 
     # Scrub types
@@ -1363,6 +1408,64 @@ paths:
                 $ref: '#/components/schemas/AddVdevResponse'
         '400':
           description: Invalid request (bad vdev type, invalid devices, device in use)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Pool not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /pools/{name}/vdev/{device}:
+    delete:
+      summary: Remove vdev from pool
+      description: |
+        Remove a vdev from an existing pool.
+
+        **Implementation**: FROM-SCRATCH using `zpool_vdev_remove()` libzfs FFI.
+
+        **Removable Vdevs**:
+        - `mirror`: Can be removed (data evacuated to remaining vdevs)
+        - `disk`: Single disk can be removed if pool has redundancy
+        - `log`: ZIL device can be removed
+        - `cache`: L2ARC device can be removed immediately
+        - `spare`: Hot spare can be removed
+
+        **Non-Removable Vdevs** (ZFS limitation):
+        - `raidz`, `raidz2`, `raidz3`: Cannot be removed
+        - `draid`: Cannot be removed
+
+        **Note**: Removing data vdevs requires evacuation (data migration) which may
+        take time depending on data size. The pool must have sufficient space on
+        remaining vdevs to hold the evacuated data.
+      operationId: removeVdev
+      tags:
+        - Pools
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Pool name
+        - name: device
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Device path to remove (e.g., /dev/sdc or vdev GUID)
+      responses:
+        '200':
+          description: Vdev removed successfully (or removal initiated for data vdevs)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoveVdevResponse'
+        '400':
+          description: Invalid request (cannot remove raidz, device not in pool, etc.)
           content:
             application/json:
               schema:

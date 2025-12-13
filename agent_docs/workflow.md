@@ -34,12 +34,7 @@ ToDo → Plan → Implement → Test → Commit(develop) → Harden → Commit(m
 - Output: Working code, structure.md current
 
 ## 4. Testing
-- Create/update test file mirroring source path
-- Test file must cover:
-  - Happy path
-  - Edge cases (empty input, boundary values)
-  - Error conditions
-
+- see agent_docs/testing.md
 
 ## 5. Commit to Develop
 - **Enforced**: Full test suite must pass (PreToolUse hook blocks otherwise)
@@ -75,17 +70,6 @@ develop  ──●──┴──●──●──●────┴──●�
 - `develop`: Integration branch, may break
 - `main`: Stable releases only
 - Features merge to develop first, then promote to main
-
-## Test Conventions
-
-Path mapping:
-```
-src/module/file.py     → tests/module/test_file.py
-src/utils/helpers.py   → tests/utils/test_helpers.py
-lib/parser.js          → tests/lib/parser.test.js
-```
-
-Test file first line: reference to source file(s) under test.
 
 ## Status Transitions
 
@@ -129,23 +113,17 @@ ZFS operations are critical. Prefer battle-tested patterns over clever shortcuts
 
 When implementing a new ZFS feature, follow this workflow:
 
-1. **Update documentation**
-   - Update `_resources/ZFS-Features.md` with the new feature
-   - Mark feature with proper category (native/CLI/hybrid)
-   - If CLI-based, add to `_resources/CLI_func.md`
 
-2. **API documentation**
+1. **Update ZFS/API documentation**
    - Document new/modified endpoints in `openapi.yaml`
+   - Update features.json with ZFS Features
    - Ensure request/response schemas are complete
 
-3. **Test the feature**
+2. **Test the feature**
    - Run targeted tests during development
+   - see agent_docs/testing.md
    - Full integration test before commit
 
-4. **Commit to develop**
+3. **Commit to develop**
    - Follow standard commit workflow
 
-5. **Categorize for integration tests**
-   - Ask user about test placement:
-     - **Test-A**: Dataset, Snapshot, Property stress tests
-     - **Test-B**: Pool, Replication, Auth, API edge cases

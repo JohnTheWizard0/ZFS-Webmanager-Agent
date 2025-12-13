@@ -338,6 +338,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 add_vdev_handler(name, body, zfs)
             });
 
+        // DELETE /pools/{name}/vdev/{device_path...} - remove vdev from pool
+        // Uses path::tail() to capture device paths with slashes (e.g., /dev/sda -> dev/sda)
+        let remove_vdev = warp::delete()
+            .and(warp::path("pools"))
+            .and(warp::path::param())
+            .and(warp::path("vdev"))
+            .and(warp::path::tail())
+            .and(safety_filter.clone())
+            .and(with_action_tracking("remove_vdev", last_action.clone()))
+            .and(zfs.clone())
+            .and(api_key_check.clone())
+            .and_then(
+                |name: String, tail: warp::path::Tail, zfs: ZfsManager, _| {
+                    // Reconstruct device path by prepending /
+                    let device = format!("/{}", tail.as_str());
+                    remove_vdev_handler(name, device, zfs)
+                },
+            );
+
         // IMPORTANT: Route order matters for warp path matching!
         // - list_importable (GET /pools/importable) MUST come BEFORE status (GET /pools/{param})
         // - import_pool (POST /pools/import) MUST come BEFORE create (POST /pools + body)
@@ -352,6 +371,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .or(scrub_status)
             .or(export_pool)
             .or(add_vdev)
+            .or(remove_vdev)
     };
 
     // Snapshot routes

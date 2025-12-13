@@ -37,6 +37,7 @@ zfs-agent/
 ├── Cargo.toml               # Rust dependencies
 ├── Cargo.lock               # Locked dependency versions
 ├── openapi.yaml             # API specification (OpenAPI 3.0)
+├── features.json            # ZFS feature list (loaded at runtime by /features)
 ├── settings.json            # Agent configuration (safety settings)
 ├── rust-toolchain.toml      # Rust version pinning
 ├── CLAUDE.md                # Agent instructions

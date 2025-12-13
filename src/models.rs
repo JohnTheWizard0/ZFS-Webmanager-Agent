@@ -222,7 +222,7 @@ pub struct RollbackBlockedResponse {
 // ============================================================================
 
 /// Implementation method for a ZFS feature
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ImplementationMethod {
     /// Uses libzetta library bindings
@@ -240,7 +240,7 @@ pub enum ImplementationMethod {
 }
 
 /// Feature category
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FeatureCategory {
     Pool,
@@ -252,17 +252,24 @@ pub enum FeatureCategory {
 }
 
 /// Individual ZFS feature info
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ZfsFeatureInfo {
     pub name: String,
     pub category: FeatureCategory,
     pub implemented: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub implementation: Option<ImplementationMethod>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub endpoint: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub notes: Option<String>,
+}
+
+/// JSON file structure for features
+#[derive(Debug, Deserialize)]
+pub struct FeaturesFile {
+    pub version: String,
+    pub features: Vec<ZfsFeatureInfo>,
 }
 
 /// Summary counts by category
@@ -282,315 +289,30 @@ pub struct ZfsFeaturesResponse {
     pub features: Vec<ZfsFeatureInfo>,
 }
 
+/// Embedded default features.json (fallback if file not found)
+const DEFAULT_FEATURES_JSON: &str = include_str!("../features.json");
+
 impl ZfsFeaturesResponse {
+    /// Load features from features.json file (or embedded default)
+    fn load_features() -> Vec<ZfsFeatureInfo> {
+        // Try to load from file first (allows runtime updates without recompile)
+        let json_content = std::fs::read_to_string("features.json")
+            .or_else(|_| std::fs::read_to_string("/etc/zfs-agent/features.json"))
+            .unwrap_or_else(|_| DEFAULT_FEATURES_JSON.to_string());
+
+        match serde_json::from_str::<FeaturesFile>(&json_content) {
+            Ok(file) => file.features,
+            Err(e) => {
+                eprintln!("Warning: Failed to parse features.json: {}", e);
+                // Return empty on parse error (shouldn't happen with embedded default)
+                vec![]
+            }
+        }
+    }
+
     /// Build the features response with all known features
     pub fn build() -> Self {
-        let features = vec![
-            // Pool Operations (7 implemented)
-            ZfsFeatureInfo {
-                name: "List pools".to_string(),
-                category: FeatureCategory::Pool,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Libzetta),
-                endpoint: Some("GET /v1/pools".to_string()),
-                notes: Some("Returns pool names".to_string()),
-            },
-            ZfsFeatureInfo {
-                name: "Get pool status".to_string(),
-                category: FeatureCategory::Pool,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Libzetta),
-                endpoint: Some("GET /v1/pools/{name}".to_string()),
-                notes: Some("Health, size, capacity, vdevs".to_string()),
-            },
-            ZfsFeatureInfo {
-                name: "Create pool".to_string(),
-                category: FeatureCategory::Pool,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Libzetta),
-                endpoint: Some("POST /v1/pools".to_string()),
-                notes: Some("Single disk, mirror, raidz/2/3".to_string()),
-            },
-            ZfsFeatureInfo {
-                name: "Destroy pool".to_string(),
-                category: FeatureCategory::Pool,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Libzetta),
-                endpoint: Some("DELETE /v1/pools/{name}".to_string()),
-                notes: Some("Force option supported".to_string()),
-            },
-            ZfsFeatureInfo {
-                name: "Scrub pool".to_string(),
-                category: FeatureCategory::Pool,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Libzfs),
-                endpoint: Some("POST/GET /v1/pools/{name}/scrub".to_string()),
-                notes: Some("Progress via libzfs FFI (pool_scan_stat_t)".to_string()),
-            },
-            ZfsFeatureInfo {
-                name: "Import pool".to_string(),
-                category: FeatureCategory::Pool,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Libzetta),
-                endpoint: Some("POST /v1/pools/import".to_string()),
-                notes: Some("Import by name, optional dir. Rename (new_name) uses CLI".to_string()),
-            },
-            ZfsFeatureInfo {
-                name: "Export pool".to_string(),
-                category: FeatureCategory::Pool,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Libzetta),
-                endpoint: Some("POST /v1/pools/{name}/export".to_string()),
-                notes: Some("Force option supported".to_string()),
-            },
-            ZfsFeatureInfo {
-                name: "List importable pools".to_string(),
-                category: FeatureCategory::Pool,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Libzetta),
-                endpoint: Some("GET /v1/pools/importable".to_string()),
-                notes: Some("Discover pools, optional dir".to_string()),
-            },
-            // Dataset Operations (5 implemented, 2 planned)
-            ZfsFeatureInfo {
-                name: "List datasets".to_string(),
-                category: FeatureCategory::Dataset,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Libzetta),
-                endpoint: Some("GET /v1/datasets/{pool}".to_string()),
-                notes: Some("Filesystems in pool".to_string()),
-            },
-            ZfsFeatureInfo {
-                name: "Create dataset".to_string(),
-                category: FeatureCategory::Dataset,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Libzetta),
-                endpoint: Some("POST /v1/datasets".to_string()),
-                notes: Some("Filesystem or volume".to_string()),
-            },
-            ZfsFeatureInfo {
-                name: "Delete dataset".to_string(),
-                category: FeatureCategory::Dataset,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Libzetta),
-                endpoint: Some("DELETE /v1/datasets/{name}".to_string()),
-                notes: None,
-            },
-            ZfsFeatureInfo {
-                name: "Get dataset properties".to_string(),
-                category: FeatureCategory::Dataset,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Libzetta),
-                endpoint: Some("GET /v1/datasets/{path}/properties".to_string()),
-                notes: None,
-            },
-            ZfsFeatureInfo {
-                name: "Set dataset properties".to_string(),
-                category: FeatureCategory::Dataset,
-                implemented: true,
-                implementation: Some(ImplementationMethod::CliExperimental),
-                endpoint: Some("PUT /v1/datasets/{path}/properties".to_string()),
-                notes: Some("EXPERIMENTAL: Uses CLI (zfs set)".to_string()),
-            },
-            ZfsFeatureInfo {
-                name: "Promote clone".to_string(),
-                category: FeatureCategory::Dataset,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Ffi),
-                endpoint: Some("POST /v1/datasets/{path}/promote".to_string()),
-                notes: Some("lzc_promote() FFI".to_string()),
-            },
-            ZfsFeatureInfo {
-                name: "Rollback dataset".to_string(),
-                category: FeatureCategory::Dataset,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Ffi),
-                endpoint: Some("POST /v1/datasets/{path}/rollback".to_string()),
-                notes: Some("lzc_rollback_to() FFI, 3 safety levels".to_string()),
-            },
-            ZfsFeatureInfo {
-                name: "Rename dataset".to_string(),
-                category: FeatureCategory::Dataset,
-                implemented: false,
-                implementation: Some(ImplementationMethod::Planned),
-                endpoint: None,
-                notes: None,
-            },
-            ZfsFeatureInfo {
-                name: "Mount/unmount dataset".to_string(),
-                category: FeatureCategory::Dataset,
-                implemented: false,
-                implementation: Some(ImplementationMethod::Planned),
-                endpoint: None,
-                notes: None,
-            },
-            // Snapshot Operations (6 implemented)
-            ZfsFeatureInfo {
-                name: "List snapshots".to_string(),
-                category: FeatureCategory::Snapshot,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Libzetta),
-                endpoint: Some("GET /v1/snapshots/{dataset}".to_string()),
-                notes: None,
-            },
-            ZfsFeatureInfo {
-                name: "Create snapshot".to_string(),
-                category: FeatureCategory::Snapshot,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Libzetta),
-                endpoint: Some("POST /v1/snapshots/{dataset}".to_string()),
-                notes: None,
-            },
-            ZfsFeatureInfo {
-                name: "Delete snapshot".to_string(),
-                category: FeatureCategory::Snapshot,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Libzetta),
-                endpoint: Some("DELETE /v1/snapshots/{dataset}/{name}".to_string()),
-                notes: None,
-            },
-            ZfsFeatureInfo {
-                name: "Clone snapshot".to_string(),
-                category: FeatureCategory::Snapshot,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Ffi),
-                endpoint: Some("POST /v1/snapshots/{dataset}/{name}/clone".to_string()),
-                notes: Some("lzc_clone() FFI".to_string()),
-            },
-            // Property Operations (6 properties)
-            ZfsFeatureInfo {
-                name: "Read quota".to_string(),
-                category: FeatureCategory::Property,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Libzetta),
-                endpoint: Some("GET /v1/datasets/{path}/properties".to_string()),
-                notes: Some("Dataset size limit".to_string()),
-            },
-            ZfsFeatureInfo {
-                name: "Read compression".to_string(),
-                category: FeatureCategory::Property,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Libzetta),
-                endpoint: Some("GET /v1/datasets/{path}/properties".to_string()),
-                notes: Some("lz4, zstd, etc.".to_string()),
-            },
-            ZfsFeatureInfo {
-                name: "Read reservation".to_string(),
-                category: FeatureCategory::Property,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Libzetta),
-                endpoint: Some("GET /v1/datasets/{path}/properties".to_string()),
-                notes: Some("Guaranteed space".to_string()),
-            },
-            ZfsFeatureInfo {
-                name: "Read mountpoint".to_string(),
-                category: FeatureCategory::Property,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Libzetta),
-                endpoint: Some("GET /v1/datasets/{path}/properties".to_string()),
-                notes: None,
-            },
-            ZfsFeatureInfo {
-                name: "Read readonly".to_string(),
-                category: FeatureCategory::Property,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Libzetta),
-                endpoint: Some("GET /v1/datasets/{path}/properties".to_string()),
-                notes: None,
-            },
-            ZfsFeatureInfo {
-                name: "Read atime".to_string(),
-                category: FeatureCategory::Property,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Libzetta),
-                endpoint: Some("GET /v1/datasets/{path}/properties".to_string()),
-                notes: Some("Access time tracking".to_string()),
-            },
-            // Replication (6 implemented)
-            ZfsFeatureInfo {
-                name: "Send snapshot to file".to_string(),
-                category: FeatureCategory::Replication,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Libzetta),
-                endpoint: Some("POST /v1/snapshots/{ds}/{snap}/send".to_string()),
-                notes: Some("Full/incremental via libzetta send_full/send_incremental".to_string()),
-            },
-            ZfsFeatureInfo {
-                name: "Receive from file".to_string(),
-                category: FeatureCategory::Replication,
-                implemented: true,
-                implementation: Some(ImplementationMethod::CliExperimental),
-                endpoint: Some("POST /v1/datasets/{path}/receive".to_string()),
-                notes: Some(
-                    "CLI: lzc_receive too low-level (no stream header parsing)".to_string(),
-                ),
-            },
-            ZfsFeatureInfo {
-                name: "Replicate to pool".to_string(),
-                category: FeatureCategory::Replication,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Hybrid),
-                endpoint: Some("POST /v1/snapshots/{ds}/{snap}/replicate".to_string()),
-                notes: Some("libzetta send + CLI receive (lzc_receive too low-level)".to_string()),
-            },
-            ZfsFeatureInfo {
-                name: "Estimate send size".to_string(),
-                category: FeatureCategory::Replication,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Ffi),
-                endpoint: Some("GET /v1/snapshots/{ds}/{snap}/send-size".to_string()),
-                notes: Some("lzc_send_space() FFI".to_string()),
-            },
-            ZfsFeatureInfo {
-                name: "Task status".to_string(),
-                category: FeatureCategory::Replication,
-                implemented: true,
-                implementation: None,
-                endpoint: Some("GET /v1/tasks/{task_id}".to_string()),
-                notes: Some("Pool busy tracking, 1hr expiry".to_string()),
-            },
-            ZfsFeatureInfo {
-                name: "Incremental send".to_string(),
-                category: FeatureCategory::Replication,
-                implemented: true,
-                implementation: Some(ImplementationMethod::Libzetta),
-                endpoint: Some("POST /v1/snapshots/{ds}/{snap}/send".to_string()),
-                notes: Some("libzetta send_incremental, from_snapshot param".to_string()),
-            },
-            // System features (not ZFS-specific, no implementation label)
-            ZfsFeatureInfo {
-                name: "Health check".to_string(),
-                category: FeatureCategory::System,
-                implemented: true,
-                implementation: None,
-                endpoint: Some("GET /v1/health".to_string()),
-                notes: Some("Version, last action".to_string()),
-            },
-            ZfsFeatureInfo {
-                name: "API documentation".to_string(),
-                category: FeatureCategory::System,
-                implemented: true,
-                implementation: None,
-                endpoint: Some("GET /v1/docs".to_string()),
-                notes: Some("Swagger UI".to_string()),
-            },
-            ZfsFeatureInfo {
-                name: "Feature discovery".to_string(),
-                category: FeatureCategory::System,
-                implemented: true,
-                implementation: None,
-                endpoint: Some("GET /v1/features".to_string()),
-                notes: Some("This page".to_string()),
-            },
-            ZfsFeatureInfo {
-                name: "Command execution".to_string(),
-                category: FeatureCategory::System,
-                implemented: true,
-                implementation: Some(ImplementationMethod::CliExperimental),
-                endpoint: Some("POST /v1/command".to_string()),
-                notes: Some("Arbitrary shell commands".to_string()),
-            },
-        ];
+        let features = Self::load_features();
 
         let implemented = features.iter().filter(|f| f.implemented).count() as u32;
         let planned = features.iter().filter(|f| !f.implemented).count() as u32;
@@ -839,6 +561,15 @@ pub struct AddVdevResponse {
     pub pool: String,
     pub vdev_type: String,
     pub devices: Vec<String>,
+    pub message: String,
+}
+
+/// Response after successfully removing a vdev
+#[derive(Debug, Serialize)]
+pub struct RemoveVdevResponse {
+    pub status: String,
+    pub pool: String,
+    pub device: String,
     pub message: String,
 }
 
