@@ -22,7 +22,7 @@ info:
     - **HYBRID**: Combination (e.g., libzetta send + CLI receive)
 
     Features using CLI are clearly marked in their descriptions.
-  version: 0.5.6
+  version: 0.5.8
   contact:
     name: ZFS Agent
   license:

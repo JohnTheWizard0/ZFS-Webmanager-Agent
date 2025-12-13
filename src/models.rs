@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::time::SystemTime;
 use std::collections::HashMap;
+use std::time::SystemTime;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LastAction {
@@ -14,8 +14,11 @@ impl LastAction {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
-        Self { function, timestamp }
+
+        Self {
+            function,
+            timestamp,
+        }
     }
 }
 
@@ -98,7 +101,7 @@ pub struct CommandRequest {
 }
 
 // Scrub status response
-// FROM-SCRATCH implementation using libzfs FFI bindings.
+// Implementation via libzfs FFI bindings.
 // Extracts real scan progress from pool_scan_stat_t via nvlist.
 #[derive(Debug, Serialize)]
 pub struct ScrubStatusResponse {
@@ -107,7 +110,7 @@ pub struct ScrubStatusResponse {
     pub pool_health: String,
     pub pool_errors: Option<String>,
     // Scan details from pool_scan_stat_t
-    pub scan_state: String,           // none, scanning, finished, canceled
+    pub scan_state: String,            // none, scanning, finished, canceled
     pub scan_function: Option<String>, // scrub, resilver, errorscrub
     pub start_time: Option<u64>,       // Unix timestamp
     pub end_time: Option<u64>,         // Unix timestamp (if finished)
@@ -160,46 +163,39 @@ pub struct SetPropertyRequest {
     pub value: String,
 }
 
-// Clone snapshot request (MF-003 Phase 3)
-// Creates a writable clone from a snapshot
+// Clone snapshot request
 #[derive(Debug, Deserialize)]
 pub struct CloneSnapshotRequest {
-    pub target: String,  // Target clone path (e.g., "tank/data-clone")
+    pub target: String, // Target clone path (e.g., "tank/data-clone")
 }
 
-// Clone response (MF-003 Phase 3)
+// Clone response
 #[derive(Debug, Serialize)]
 pub struct CloneResponse {
     pub status: String,
-    pub origin: String,   // Source snapshot
-    pub clone: String,    // New clone path
+    pub origin: String, // Source snapshot
+    pub clone: String,  // New clone path
 }
 
-// Promote response (MF-003 Phase 3)
+// Promote response
 #[derive(Debug, Serialize)]
 pub struct PromoteResponse {
     pub status: String,
-    pub dataset: String,  // Promoted dataset path
+    pub dataset: String, // Promoted dataset path
     pub message: String,
 }
 
-// Rollback request (MF-003 Phase 3)
-// Rolls back a dataset to a snapshot
-//
-// Safety levels:
-// - Default: Only allows rollback to most recent snapshot
-// - force_destroy_newer: Destroys intermediate snapshots (zfs rollback -r)
-// - force_destroy_newer + force_destroy_clones: Destroys snapshots AND clones (zfs rollback -R)
+// Rollback request
 #[derive(Debug, Deserialize)]
 pub struct RollbackRequest {
-    pub snapshot: String,  // Target snapshot name (without @)
+    pub snapshot: String, // Target snapshot name (without @)
     #[serde(default)]
     pub force_destroy_newer: bool,
     #[serde(default)]
     pub force_destroy_clones: bool,
 }
 
-// Rollback response (MF-003 Phase 3)
+// Rollback response
 #[derive(Debug, Serialize)]
 pub struct RollbackResponse {
     pub status: String,
@@ -212,8 +208,7 @@ pub struct RollbackResponse {
     pub destroyed_clones: Option<Vec<String>>,
 }
 
-// Rollback blocked response (MF-003 Phase 3)
-// Returned when rollback is blocked by newer snapshots/clones
+// Rollback blocked response
 #[derive(Debug, Serialize)]
 pub struct RollbackBlockedResponse {
     pub status: String,
@@ -223,7 +218,7 @@ pub struct RollbackBlockedResponse {
 }
 
 // ============================================================================
-// ZFS Features Discovery (System)
+// ZFS Features Discovery
 // ============================================================================
 
 /// Implementation method for a ZFS feature
@@ -232,7 +227,7 @@ pub struct RollbackBlockedResponse {
 pub enum ImplementationMethod {
     /// Uses libzetta library bindings
     Libzetta,
-    /// FROM-SCRATCH FFI implementation (lzc_* functions)
+    /// Direct FFI implementation (lzc_* functions via libzetta-zfs-core-sys)
     Ffi,
     /// Uses libzfs FFI bindings directly
     Libzfs,
@@ -403,7 +398,7 @@ impl ZfsFeaturesResponse {
                 implemented: true,
                 implementation: Some(ImplementationMethod::Ffi),
                 endpoint: Some("POST /v1/datasets/{path}/promote".to_string()),
-                notes: Some("FROM-SCRATCH lzc_promote() FFI".to_string()),
+                notes: Some("lzc_promote() FFI".to_string()),
             },
             ZfsFeatureInfo {
                 name: "Rollback dataset".to_string(),
@@ -411,7 +406,7 @@ impl ZfsFeaturesResponse {
                 implemented: true,
                 implementation: Some(ImplementationMethod::Ffi),
                 endpoint: Some("POST /v1/datasets/{path}/rollback".to_string()),
-                notes: Some("FROM-SCRATCH lzc_rollback_to() FFI, 3 safety levels".to_string()),
+                notes: Some("lzc_rollback_to() FFI, 3 safety levels".to_string()),
             },
             ZfsFeatureInfo {
                 name: "Rename dataset".to_string(),
@@ -460,7 +455,7 @@ impl ZfsFeaturesResponse {
                 implemented: true,
                 implementation: Some(ImplementationMethod::Ffi),
                 endpoint: Some("POST /v1/snapshots/{dataset}/{name}/clone".to_string()),
-                notes: Some("FROM-SCRATCH lzc_clone() FFI".to_string()),
+                notes: Some("lzc_clone() FFI".to_string()),
             },
             // Property Operations (6 properties)
             ZfsFeatureInfo {
@@ -526,7 +521,9 @@ impl ZfsFeaturesResponse {
                 implemented: true,
                 implementation: Some(ImplementationMethod::CliExperimental),
                 endpoint: Some("POST /v1/datasets/{path}/receive".to_string()),
-                notes: Some("CLI: lzc_receive too low-level (no stream header parsing)".to_string()),
+                notes: Some(
+                    "CLI: lzc_receive too low-level (no stream header parsing)".to_string(),
+                ),
             },
             ZfsFeatureInfo {
                 name: "Replicate to pool".to_string(),
@@ -542,7 +539,7 @@ impl ZfsFeaturesResponse {
                 implemented: true,
                 implementation: Some(ImplementationMethod::Ffi),
                 endpoint: Some("GET /v1/snapshots/{ds}/{snap}/send-size".to_string()),
-                notes: Some("FROM-SCRATCH lzc_send_space() FFI".to_string()),
+                notes: Some("lzc_send_space() FFI".to_string()),
             },
             ZfsFeatureInfo {
                 name: "Task status".to_string(),
@@ -612,7 +609,7 @@ impl ZfsFeaturesResponse {
 }
 
 // ============================================================================
-// Replication / Task System (MF-005)
+// Replication / Task System
 // ============================================================================
 
 /// Task status for async operations
@@ -674,7 +671,7 @@ pub struct TaskResponse {
 /// Task status response (for GET /tasks/{id})
 #[derive(Debug, Serialize)]
 pub struct TaskStatusResponse {
-    pub status: String,  // "pending", "running", "completed", "failed"
+    pub status: String, // "pending", "running", "completed", "failed"
     pub task_id: String,
     pub operation: TaskOperation,
     pub started_at: u64,
@@ -709,7 +706,7 @@ impl From<&TaskState> for TaskStatusResponse {
 }
 
 // ============================================================================
-// Replication Request Types (MF-005)
+// Replication Request Types
 // ============================================================================
 
 /// Request to send snapshot to file
@@ -717,7 +714,7 @@ impl From<&TaskState> for TaskStatusResponse {
 pub struct SendSnapshotRequest {
     pub output_file: String,
     #[serde(default)]
-    pub from_snapshot: Option<String>,  // incremental base
+    pub from_snapshot: Option<String>, // incremental base
     #[serde(default)]
     pub recursive: bool,
     #[serde(default)]
@@ -749,7 +746,7 @@ pub struct ReceiveSnapshotRequest {
 pub struct ReplicateSnapshotRequest {
     pub target_dataset: String,
     #[serde(default)]
-    pub from_snapshot: Option<String>,  // incremental base
+    pub from_snapshot: Option<String>, // incremental base
     #[serde(default)]
     pub recursive: bool,
     #[serde(default)]
@@ -768,7 +765,7 @@ pub struct ReplicateSnapshotRequest {
 #[derive(Debug, Deserialize)]
 pub struct DeleteDatasetQuery {
     #[serde(default)]
-    pub recursive: bool,  // -r flag for recursive delete (children + snapshots)
+    pub recursive: bool, // -r flag for recursive delete (children + snapshots)
 }
 
 /// Query params for send size estimation
@@ -795,7 +792,7 @@ pub struct SendSizeResponse {
 }
 
 // ============================================================================
-// UNIT TESTS — MI-002 (API Framework - Data Layer)
+// UNIT TESTS
 // ============================================================================
 #[cfg(test)]
 mod tests {
@@ -810,11 +807,20 @@ mod tests {
     /// Expected: Within 2 seconds of now
     #[test]
     fn test_last_action_timestamp_current() {
-        let before = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let before = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let action = LastAction::new("test_function".to_string());
-        let after = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let after = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
-        assert!(action.timestamp >= before, "Timestamp should be >= start time");
+        assert!(
+            action.timestamp >= before,
+            "Timestamp should be >= start time"
+        );
         assert!(action.timestamp <= after, "Timestamp should be <= end time");
     }
 

@@ -1,28 +1,25 @@
 use std::fs;
 use std::path::PathBuf;
-use warp::{Rejection, http::HeaderMap};
 use uuid::Uuid;
+use warp::{http::HeaderMap, Rejection};
 
 const API_KEY_FILE: &str = "api_key.txt";
 
 pub fn get_or_create_api_key() -> Result<String, Box<dyn std::error::Error>> {
-    let mut api_key_path = dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."));
+    let mut api_key_path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
     api_key_path.push("zfs_webmanager");
-    
+
     // Create directory if it doesn't exist
     if !api_key_path.exists() {
         fs::create_dir_all(&api_key_path)?;
     }
-    
+
     api_key_path.push(API_KEY_FILE);
 
     if api_key_path.exists() {
         // Read existing API key
-        let api_key = fs::read_to_string(&api_key_path)?
-            .trim()
-            .to_string();
-        
+        let api_key = fs::read_to_string(&api_key_path)?.trim().to_string();
+
         if !api_key.is_empty() {
             return Ok(api_key);
         }
@@ -31,27 +28,22 @@ pub fn get_or_create_api_key() -> Result<String, Box<dyn std::error::Error>> {
     // Generate new API key
     let api_key = Uuid::new_v4().to_string();
     fs::write(&api_key_path, &api_key)?;
-    
+
     Ok(api_key)
 }
 
-pub async fn check_api_key(
-    headers: HeaderMap,
-    expected_api_key: String,
-) -> Result<(), Rejection> {
+pub async fn check_api_key(headers: HeaderMap, expected_api_key: String) -> Result<(), Rejection> {
     match headers.get("X-API-Key") {
-        Some(header_value) => {
-            match header_value.to_str() {
-                Ok(provided_key) => {
-                    if provided_key == expected_api_key {
-                        Ok(())
-                    } else {
-                        Err(warp::reject::custom(ApiKeyError::Invalid))
-                    }
+        Some(header_value) => match header_value.to_str() {
+            Ok(provided_key) => {
+                if provided_key == expected_api_key {
+                    Ok(())
+                } else {
+                    Err(warp::reject::custom(ApiKeyError::Invalid))
                 }
-                Err(_) => Err(warp::reject::custom(ApiKeyError::Invalid)),
             }
-        }
+            Err(_) => Err(warp::reject::custom(ApiKeyError::Invalid)),
+        },
         None => Err(warp::reject::custom(ApiKeyError::Missing)),
     }
 }
@@ -65,7 +57,7 @@ pub enum ApiKeyError {
 impl warp::reject::Reject for ApiKeyError {}
 
 // ============================================================================
-// UNIT TESTS — MI-001 (Auth)
+// UNIT TESTS
 // ============================================================================
 #[cfg(test)]
 mod tests {
@@ -79,8 +71,10 @@ mod tests {
         let uuid = Uuid::new_v4().to_string();
         assert_eq!(uuid.len(), 36, "UUID should be 36 characters");
         assert_eq!(uuid.matches('-').count(), 4, "UUID should have 4 hyphens");
-        assert!(uuid.chars().all(|c| c.is_ascii_hexdigit() || c == '-'),
-            "UUID should only contain hex digits and hyphens");
+        assert!(
+            uuid.chars().all(|c| c.is_ascii_hexdigit() || c == '-'),
+            "UUID should only contain hex digits and hyphens"
+        );
     }
 
     /// Test: API key validation - correct key accepted

@@ -61,11 +61,11 @@ pub fn with_action_tracking(
                 *action = Some(LastAction::new(function_name.to_string()));
             }
         })
-        .untuple_one()               // ← collapses ((),) to ()
+        .untuple_one() // ← collapses ((),) to ()
 }
 
 // ============================================================================
-// UNIT TESTS — MI-002 (API Framework - Utils)
+// UNIT TESTS
 // ============================================================================
 #[cfg(test)]
 mod tests {
@@ -76,7 +76,9 @@ mod tests {
     #[test]
     fn test_success_response_returns_json() {
         #[derive(Serialize)]
-        struct TestData { value: i32 }
+        struct TestData {
+            value: i32,
+        }
 
         let data = TestData { value: 42 };
         // Test passes if this compiles and returns without panic
@@ -125,9 +127,8 @@ mod tests {
     /// Expected: RwLock allows safe concurrent reads
     #[test]
     fn test_action_tracking_concurrent_reads() {
-        let last_action: Arc<RwLock<Option<LastAction>>> = Arc::new(RwLock::new(
-            Some(LastAction::new("initial".to_string()))
-        ));
+        let last_action: Arc<RwLock<Option<LastAction>>> =
+            Arc::new(RwLock::new(Some(LastAction::new("initial".to_string()))));
 
         // Clone Arc for "concurrent" access
         let reader1 = last_action.clone();

@@ -1,10 +1,12 @@
 use crate::models::*;
 use crate::task_manager::TaskManager;
-use crate::utils::{success_response, error_response, validate_snapshot_name, validate_dataset_name};
-use crate::zfs_management::{ZfsManager, RollbackError};
-use warp::{Rejection, Reply};
-use std::sync::{Arc, RwLock};
+use crate::utils::{
+    error_response, success_response, validate_dataset_name, validate_snapshot_name,
+};
+use crate::zfs_management::{RollbackError, ZfsManager};
 use std::process::Command;
+use std::sync::{Arc, RwLock};
+use warp::{Rejection, Reply};
 
 // Embed OpenAPI spec at compile time
 const OPENAPI_SPEC: &str = include_str!("../openapi.yaml");
@@ -103,7 +105,9 @@ fn build_features_html(data: &ZfsFeaturesResponse) -> String {
     ];
 
     for (cat_key, cat_name, cat_icon) in categories {
-        let cat_features: Vec<_> = data.features.iter()
+        let cat_features: Vec<_> = data
+            .features
+            .iter()
             .filter(|f| format!("{:?}", f.category).to_lowercase() == cat_key)
             .collect();
 
@@ -113,7 +117,8 @@ fn build_features_html(data: &ZfsFeaturesResponse) -> String {
 
         let implemented_count = cat_features.iter().filter(|f| f.implemented).count();
 
-        features_html.push_str(&format!(r#"
+        features_html.push_str(&format!(
+            r#"
         <div class="category">
             <div class="category-header">
                 <span class="category-icon">{}</span>
@@ -121,15 +126,25 @@ fn build_features_html(data: &ZfsFeaturesResponse) -> String {
                 <span class="category-count">{}/{}</span>
             </div>
             <div class="features-grid">
-        "#, cat_icon, cat_name, implemented_count, cat_features.len()));
+        "#,
+            cat_icon,
+            cat_name,
+            implemented_count,
+            cat_features.len()
+        ));
 
         for feature in cat_features {
-            let status_class = if feature.implemented { "implemented" } else { "planned" };
+            let status_class = if feature.implemented {
+                "implemented"
+            } else {
+                "planned"
+            };
             let status_icon = if feature.implemented { "✓" } else { "○" };
 
             let impl_badge = match &feature.implementation {
                 Some(m) => {
-                    let (badge_class, badge_text) = match format!("{:?}", m).to_lowercase().as_str() {
+                    let (badge_class, badge_text) = match format!("{:?}", m).to_lowercase().as_str()
+                    {
                         "libzetta" => ("libzetta", "libzetta"),
                         "ffi" => ("ffi", "FFI"),
                         "libzfs" => ("libzfs", "libzfs"),
@@ -137,20 +152,28 @@ fn build_features_html(data: &ZfsFeaturesResponse) -> String {
                         "hybrid" => ("hybrid", "Hybrid"),
                         _ => ("planned", "Planned"),
                     };
-                    format!(r#"<span class="impl-badge {}">{}</span>"#, badge_class, badge_text)
+                    format!(
+                        r#"<span class="impl-badge {}">{}</span>"#,
+                        badge_class, badge_text
+                    )
                 }
                 None => String::new(),
             };
 
-            let endpoint_html = feature.endpoint.as_ref()
+            let endpoint_html = feature
+                .endpoint
+                .as_ref()
                 .map(|e| format!(r#"<div class="endpoint"><code>{}</code></div>"#, e))
                 .unwrap_or_default();
 
-            let notes_html = feature.notes.as_ref()
+            let notes_html = feature
+                .notes
+                .as_ref()
                 .map(|n| format!(r#"<div class="notes">{}</div>"#, n))
                 .unwrap_or_default();
 
-            features_html.push_str(&format!(r#"
+            features_html.push_str(&format!(
+                r#"
                 <div class="feature-card {}">
                     <div class="feature-header">
                         <span class="status-icon">{}</span>
@@ -160,13 +183,16 @@ fn build_features_html(data: &ZfsFeaturesResponse) -> String {
                     {}
                     {}
                 </div>
-            "#, status_class, status_icon, feature.name, impl_badge, endpoint_html, notes_html));
+            "#,
+                status_class, status_icon, feature.name, impl_badge, endpoint_html, notes_html
+            ));
         }
 
         features_html.push_str("</div></div>");
     }
 
-    format!(r##"<!DOCTYPE html>
+    format!(
+        r##"<!DOCTYPE html>
 <html>
 <head>
     <title>ZFS Agent - Feature Coverage</title>
@@ -415,10 +441,7 @@ fn build_features_html(data: &ZfsFeaturesResponse) -> String {
     </div>
 </body>
 </html>"##,
-        data.summary.total,
-        data.summary.implemented,
-        data.summary.planned,
-        features_html
+        data.summary.total, data.summary.implemented, data.summary.planned, features_html
     )
 }
 
@@ -432,7 +455,10 @@ pub async fn list_pools_handler(zfs: ZfsManager) -> Result<impl Reply, Rejection
     }
 }
 
-pub async fn get_pool_status_handler(name: String, zfs: ZfsManager) -> Result<impl Reply, Rejection> {
+pub async fn get_pool_status_handler(
+    name: String,
+    zfs: ZfsManager,
+) -> Result<impl Reply, Rejection> {
     match zfs.get_pool_status(&name).await {
         Ok(status) => Ok(success_response(PoolStatusResponse {
             status: "success".to_string(),
@@ -449,7 +475,10 @@ pub async fn get_pool_status_handler(name: String, zfs: ZfsManager) -> Result<im
     }
 }
 
-pub async fn create_pool_handler(body: CreatePool, zfs: ZfsManager) -> Result<impl Reply, Rejection> {
+pub async fn create_pool_handler(
+    body: CreatePool,
+    zfs: ZfsManager,
+) -> Result<impl Reply, Rejection> {
     match zfs.create_pool(body).await {
         Ok(_) => Ok(success_response(ActionResponse {
             status: "success".to_string(),
@@ -459,7 +488,11 @@ pub async fn create_pool_handler(body: CreatePool, zfs: ZfsManager) -> Result<im
     }
 }
 
-pub async fn destroy_pool_handler(name: String, force: bool, zfs: ZfsManager) -> Result<impl Reply, Rejection> {
+pub async fn destroy_pool_handler(
+    name: String,
+    force: bool,
+    zfs: ZfsManager,
+) -> Result<impl Reply, Rejection> {
     match zfs.destroy_pool(&name, force).await {
         Ok(_) => Ok(success_response(ActionResponse {
             status: "success".to_string(),
@@ -469,7 +502,10 @@ pub async fn destroy_pool_handler(name: String, force: bool, zfs: ZfsManager) ->
     }
 }
 
-pub async fn list_snapshots_handler(dataset: String, zfs: ZfsManager) -> Result<impl Reply, Rejection> {
+pub async fn list_snapshots_handler(
+    dataset: String,
+    zfs: ZfsManager,
+) -> Result<impl Reply, Rejection> {
     match zfs.list_snapshots(&dataset).await {
         Ok(snapshots) => Ok(success_response(ListResponse {
             status: "success".to_string(),
@@ -492,7 +528,10 @@ pub async fn create_snapshot_handler(
     match zfs.create_snapshot(&dataset, &body.snapshot_name).await {
         Ok(_) => Ok(success_response(ActionResponse {
             status: "success".to_string(),
-            message: format!("Snapshot '{}@{}' created successfully", dataset, body.snapshot_name),
+            message: format!(
+                "Snapshot '{}@{}' created successfully",
+                dataset, body.snapshot_name
+            ),
         })),
         Err(e) => Ok(error_response(&format!("Failed to create snapshot: {}", e))),
     }
@@ -506,16 +545,21 @@ pub async fn delete_snapshot_by_path_handler(
 ) -> Result<impl Reply, Rejection> {
     if let Some(pos) = path.rfind('/') {
         let dataset = path[..pos].to_string();
-        let snapshot_name = path[pos+1..].to_string();
+        let snapshot_name = path[pos + 1..].to_string();
         match zfs.delete_snapshot(&dataset, &snapshot_name).await {
             Ok(_) => Ok(success_response(ActionResponse {
                 status: "success".to_string(),
-                message: format!("Snapshot '{}@{}' deleted successfully", dataset, snapshot_name),
+                message: format!(
+                    "Snapshot '{}@{}' deleted successfully",
+                    dataset, snapshot_name
+                ),
             })),
             Err(e) => Ok(error_response(&format!("Failed to delete snapshot: {}", e))),
         }
     } else {
-        Ok(error_response("Invalid snapshot path: expected /snapshots/dataset/snapshot_name"))
+        Ok(error_response(
+            "Invalid snapshot path: expected /snapshots/dataset/snapshot_name",
+        ))
     }
 }
 
@@ -529,7 +573,10 @@ pub async fn list_datasets_handler(pool: String, zfs: ZfsManager) -> Result<impl
     }
 }
 
-pub async fn create_dataset_handler(body: CreateDataset, zfs: ZfsManager) -> Result<impl Reply, Rejection> {
+pub async fn create_dataset_handler(
+    body: CreateDataset,
+    zfs: ZfsManager,
+) -> Result<impl Reply, Rejection> {
     // Validate dataset name before attempting creation
     if let Err(msg) = validate_dataset_name(&body.name) {
         return Ok(error_response(&format!("Invalid dataset name: {}", msg)));
@@ -544,7 +591,11 @@ pub async fn create_dataset_handler(body: CreateDataset, zfs: ZfsManager) -> Res
     }
 }
 
-pub async fn delete_dataset_handler(name: String, recursive: bool, zfs: ZfsManager) -> Result<impl Reply, Rejection> {
+pub async fn delete_dataset_handler(
+    name: String,
+    recursive: bool,
+    zfs: ZfsManager,
+) -> Result<impl Reply, Rejection> {
     let result = if recursive {
         zfs.delete_dataset_recursive(&name).await
     } else {
@@ -562,13 +613,13 @@ pub async fn delete_dataset_handler(name: String, recursive: bool, zfs: ZfsManag
                 status: "success".to_string(),
                 message: msg,
             }))
-        },
+        }
         Err(e) => Ok(error_response(&format!("Failed to delete dataset: {}", e))),
     }
 }
 
 // =========================================================================
-// Dataset Properties Handlers (MF-002 Phase 2)
+// Dataset Properties Handlers
 // =========================================================================
 
 /// Get all properties of a dataset
@@ -582,7 +633,10 @@ pub async fn get_dataset_properties_handler(
             status: "success".to_string(),
             properties: props,
         })),
-        Err(e) => Ok(error_response(&format!("Failed to get dataset properties: {}", e))),
+        Err(e) => Ok(error_response(&format!(
+            "Failed to get dataset properties: {}",
+            e
+        ))),
     }
 }
 
@@ -593,17 +647,23 @@ pub async fn set_dataset_property_handler(
     body: SetPropertyRequest,
     zfs: ZfsManager,
 ) -> Result<impl Reply, Rejection> {
-    match zfs.set_dataset_property(&name, &body.property, &body.value).await {
+    match zfs
+        .set_dataset_property(&name, &body.property, &body.value)
+        .await
+    {
         Ok(_) => Ok(success_response(ActionResponse {
             status: "success".to_string(),
-            message: format!("Property '{}' set to '{}' on dataset '{}'", body.property, body.value, name),
+            message: format!(
+                "Property '{}' set to '{}' on dataset '{}'",
+                body.property, body.value, name
+            ),
         })),
         Err(e) => Ok(error_response(&format!("Failed to set property: {}", e))),
     }
 }
 
 // =========================================================================
-// Scrub Handlers (MF-001 Phase 2)
+// Scrub Handlers
 // =========================================================================
 
 /// Start a scrub on the pool
@@ -640,9 +700,12 @@ pub async fn stop_scrub_handler(pool: String, zfs: ZfsManager) -> Result<impl Re
 }
 
 /// Get scrub status for the pool
-/// FROM-SCRATCH implementation using libzfs FFI bindings.
+/// Implementation via libzfs FFI bindings.
 /// Returns actual scan progress extracted from pool_scan_stat_t.
-pub async fn get_scrub_status_handler(pool: String, zfs: ZfsManager) -> Result<impl Reply, Rejection> {
+pub async fn get_scrub_status_handler(
+    pool: String,
+    zfs: ZfsManager,
+) -> Result<impl Reply, Rejection> {
     match zfs.get_scrub_status(&pool).await {
         Ok(scrub) => {
             // Calculate percent_done: (examined / to_examine) * 100
@@ -669,12 +732,15 @@ pub async fn get_scrub_status_handler(pool: String, zfs: ZfsManager) -> Result<i
                 percent_done,
             }))
         }
-        Err(e) => Ok(error_response(&format!("Failed to get scrub status: {}", e))),
+        Err(e) => Ok(error_response(&format!(
+            "Failed to get scrub status: {}",
+            e
+        ))),
     }
 }
 
 // =========================================================================
-// Import/Export Handlers (MF-001 Phase 2)
+// Import/Export Handlers
 // =========================================================================
 
 /// Export a pool from the system
@@ -705,12 +771,18 @@ pub async fn list_importable_pools_handler(
     match result {
         Ok(pools) => Ok(success_response(ImportablePoolsResponse {
             status: "success".to_string(),
-            pools: pools.into_iter().map(|p| ImportablePoolInfo {
-                name: p.name,
-                health: p.health,
-            }).collect(),
+            pools: pools
+                .into_iter()
+                .map(|p| ImportablePoolInfo {
+                    name: p.name,
+                    health: p.health,
+                })
+                .collect(),
         })),
-        Err(e) => Ok(error_response(&format!("Failed to list importable pools: {}", e))),
+        Err(e) => Ok(error_response(&format!(
+            "Failed to list importable pools: {}",
+            e
+        ))),
     }
 }
 
@@ -723,17 +795,12 @@ pub async fn import_pool_handler(
     // If new_name is provided, use import_with_name (CLI-based rename)
     let result = match (&body.new_name, &body.dir) {
         (Some(new_name), Some(dir)) => {
-            zfs.import_pool_with_name(&body.name, new_name, Some(dir.as_str())).await
-        },
-        (Some(new_name), None) => {
-            zfs.import_pool_with_name(&body.name, new_name, None).await
-        },
-        (None, Some(dir)) => {
-            zfs.import_pool_from_dir(&body.name, dir).await
-        },
-        (None, None) => {
-            zfs.import_pool(&body.name).await
-        },
+            zfs.import_pool_with_name(&body.name, new_name, Some(dir.as_str()))
+                .await
+        }
+        (Some(new_name), None) => zfs.import_pool_with_name(&body.name, new_name, None).await,
+        (None, Some(dir)) => zfs.import_pool_from_dir(&body.name, dir).await,
+        (None, None) => zfs.import_pool(&body.name).await,
     };
 
     let imported_name = body.new_name.as_ref().unwrap_or(&body.name);
@@ -748,24 +815,23 @@ pub async fn import_pool_handler(
 }
 
 // =========================================================================
-// Snapshot Clone/Promote Handlers (MF-003 Phase 3)
-// FROM-SCRATCH implementation using libzetta-zfs-core-sys FFI
+// Snapshot Clone/Promote Handlers
 // =========================================================================
 
 /// Clone a snapshot to create a new writable dataset
-/// FROM-SCRATCH: Uses lzc_clone() FFI directly
+/// Implementation via libzetta-zfs-core-sys FFI (lzc_clone)
 ///
 /// Path format: /v1/snapshots/{dataset}/{snapshot}/clone
 /// The dataset path can have multiple segments (e.g., tank/data/subdir)
 pub async fn clone_snapshot_handler(
-    snapshot_path: String,  // Full path: dataset/snapshot_name
+    snapshot_path: String, // Full path: dataset/snapshot_name
     body: CloneSnapshotRequest,
     zfs: ZfsManager,
 ) -> Result<impl Reply, Rejection> {
     // Parse snapshot path (everything before last '/' is dataset, last segment is snapshot name)
     if let Some(pos) = snapshot_path.rfind('/') {
         let dataset = &snapshot_path[..pos];
-        let snapshot_name = &snapshot_path[pos+1..];
+        let snapshot_name = &snapshot_path[pos + 1..];
         let full_snapshot = format!("{}@{}", dataset, snapshot_name);
 
         match zfs.clone_snapshot(&full_snapshot, &body.target).await {
@@ -777,12 +843,14 @@ pub async fn clone_snapshot_handler(
             Err(e) => Ok(error_response(&format!("Failed to clone snapshot: {}", e))),
         }
     } else {
-        Ok(error_response("Invalid snapshot path: expected /snapshots/dataset/snapshot_name/clone"))
+        Ok(error_response(
+            "Invalid snapshot path: expected /snapshots/dataset/snapshot_name/clone",
+        ))
     }
 }
 
 /// Promote a clone to an independent dataset
-/// FROM-SCRATCH: Uses lzc_promote() FFI directly
+/// Implementation via libzetta-zfs-core-sys FFI (lzc_promote)
 ///
 /// Path format: /v1/datasets/{path}/promote
 /// The dataset path can have multiple segments (e.g., tank/data-clone)
@@ -794,14 +862,17 @@ pub async fn promote_dataset_handler(
         Ok(_) => Ok(success_response(PromoteResponse {
             status: "success".to_string(),
             dataset: clone_path.clone(),
-            message: format!("Dataset '{}' promoted successfully. Former parent is now a clone.", clone_path),
+            message: format!(
+                "Dataset '{}' promoted successfully. Former parent is now a clone.",
+                clone_path
+            ),
         })),
         Err(e) => Ok(error_response(&format!("Failed to promote dataset: {}", e))),
     }
 }
 
 /// Rollback a dataset to a snapshot
-/// FROM-SCRATCH: Uses lzc_rollback_to() FFI directly
+/// Implementation via libzetta-zfs-core-sys FFI (lzc_rollback_to)
 ///
 /// Safety levels:
 /// - Default: Only allows rollback to most recent snapshot
@@ -814,12 +885,15 @@ pub async fn rollback_dataset_handler(
     body: RollbackRequest,
     zfs: ZfsManager,
 ) -> Result<impl Reply, Rejection> {
-    match zfs.rollback_dataset(
-        &dataset,
-        &body.snapshot,
-        body.force_destroy_newer,
-        body.force_destroy_clones,
-    ).await {
+    match zfs
+        .rollback_dataset(
+            &dataset,
+            &body.snapshot,
+            body.force_destroy_newer,
+            body.force_destroy_clones,
+        )
+        .await
+    {
         Ok(result) => Ok(success_response(RollbackResponse {
             status: "success".to_string(),
             dataset: dataset.clone(),
@@ -831,7 +905,11 @@ pub async fn rollback_dataset_handler(
         Err(RollbackError::InvalidRequest(msg)) => {
             Ok(error_response(&format!("Invalid request: {}", msg)))
         }
-        Err(RollbackError::Blocked { message, blocking_snapshots, blocking_clones }) => {
+        Err(RollbackError::Blocked {
+            message,
+            blocking_snapshots,
+            blocking_clones,
+        }) => {
             // Return structured blocked response with blocking items
             Ok(success_response(RollbackBlockedResponse {
                 status: "error".to_string(),
@@ -856,7 +934,7 @@ pub async fn execute_command_handler(
     }
 
     let mut cmd = Command::new(&body.command);
-    
+
     if let Some(args) = body.args {
         cmd.args(args);
     }
@@ -878,7 +956,7 @@ pub async fn execute_command_handler(
 }
 
 // =========================================================================
-// Task Management Handlers (MF-005 Replication)
+// Task Management Handlers
 // =========================================================================
 
 /// Get task status by task_id
@@ -898,16 +976,16 @@ pub async fn get_task_status_handler(
 
 /// Estimate send stream size for a snapshot
 /// GET /v1/snapshots/{dataset}/{snapshot}/send-size
-/// FROM-SCRATCH: Uses lzc_send_space() FFI
+/// Implementation via libzetta-zfs-core-sys FFI (lzc_send_space)
 pub async fn send_size_handler(
-    snapshot_path: String,  // dataset/snapshot_name
+    snapshot_path: String, // dataset/snapshot_name
     query: SendSizeQuery,
     zfs: ZfsManager,
 ) -> Result<impl Reply, Rejection> {
     // Parse snapshot path
     if let Some(pos) = snapshot_path.rfind('/') {
         let dataset = &snapshot_path[..pos];
-        let snapshot_name = &snapshot_path[pos+1..];
+        let snapshot_name = &snapshot_path[pos + 1..];
         let full_snapshot = format!("{}@{}", dataset, snapshot_name);
 
         // NOTE: lzc_send_space does NOT support recursive (-R)
@@ -927,12 +1005,15 @@ pub async fn send_size_handler(
         });
 
         // Call FFI-based estimate_send_size
-        match zfs.estimate_send_size(
-            &full_snapshot,
-            from_snapshot.as_deref(),
-            query.raw,
-            false,  // compressed flag for send_space (not directly supported by lzc_send_space)
-        ).await {
+        match zfs
+            .estimate_send_size(
+                &full_snapshot,
+                from_snapshot.as_deref(),
+                query.raw,
+                false, // compressed flag for send_space (not directly supported by lzc_send_space)
+            )
+            .await
+        {
             Ok(estimated_bytes) => {
                 let estimated_human = format_bytes(estimated_bytes);
 
@@ -948,7 +1029,9 @@ pub async fn send_size_handler(
             Err(e) => Ok(error_response(&e)),
         }
     } else {
-        Ok(error_response("Invalid snapshot path: expected /snapshots/dataset/snapshot_name/send-size"))
+        Ok(error_response(
+            "Invalid snapshot path: expected /snapshots/dataset/snapshot_name/send-size",
+        ))
     }
 }
 
@@ -975,7 +1058,7 @@ fn format_bytes(bytes: u64) -> String {
 /// Send snapshot to file
 /// POST /v1/snapshots/{dataset}/{snapshot}/send
 pub async fn send_snapshot_handler(
-    snapshot_path: String,  // dataset/snapshot_name
+    snapshot_path: String, // dataset/snapshot_name
     body: SendSnapshotRequest,
     zfs: ZfsManager,
     task_manager: TaskManager,
@@ -983,21 +1066,28 @@ pub async fn send_snapshot_handler(
     // Parse snapshot path
     if let Some(pos) = snapshot_path.rfind('/') {
         let dataset = &snapshot_path[..pos];
-        let snapshot_name = &snapshot_path[pos+1..];
+        let snapshot_name = &snapshot_path[pos + 1..];
         let full_snapshot = format!("{}@{}", dataset, snapshot_name);
 
         // Check pool busy state first
         let pool = ZfsManager::get_pool_from_path(&full_snapshot);
         if let Some(busy_task) = task_manager.is_pool_busy(&pool) {
-            return Ok(error_response(&format!("Pool '{}' is busy with task '{}'", pool, busy_task)));
+            return Ok(error_response(&format!(
+                "Pool '{}' is busy with task '{}'",
+                pool, busy_task
+            )));
         }
 
         // Dry run just returns estimated size
         if body.dry_run {
             // Use CLI for dry-run size estimation
             let mut args = vec!["send", "-n", "-P"];
-            if body.raw { args.push("-w"); }
-            if body.recursive { args.push("-R"); }
+            if body.raw {
+                args.push("-w");
+            }
+            if body.recursive {
+                args.push("-R");
+            }
             args.push(&full_snapshot);
 
             let output = Command::new("zfs").args(&args).output();
@@ -1023,7 +1113,10 @@ pub async fn send_snapshot_handler(
                 }
                 Ok(out) => {
                     let stderr = String::from_utf8_lossy(&out.stderr);
-                    return Ok(error_response(&format!("Dry run failed: {}", stderr.trim())));
+                    return Ok(error_response(&format!(
+                        "Dry run failed: {}",
+                        stderr.trim()
+                    )));
                 }
                 Err(e) => {
                     return Ok(error_response(&format!("Failed to estimate: {}", e)));
@@ -1032,13 +1125,15 @@ pub async fn send_snapshot_handler(
         }
 
         // Create task
-        let task_id = match task_manager.create_task(
-            crate::models::TaskOperation::Send,
-            vec![pool.clone()],
-        ) {
+        let task_id = match task_manager
+            .create_task(crate::models::TaskOperation::Send, vec![pool.clone()])
+        {
             Ok(id) => id,
             Err((pool, task)) => {
-                return Ok(error_response(&format!("Pool '{}' is busy with task '{}'", pool, task)));
+                return Ok(error_response(&format!(
+                    "Pool '{}' is busy with task '{}'",
+                    pool, task
+                )));
             }
         };
 
@@ -1047,31 +1142,38 @@ pub async fn send_snapshot_handler(
 
         // Execute send operation
         let from_snap = body.from_snapshot.as_deref();
-        let result = zfs.send_snapshot_to_file(
-            &full_snapshot,
-            &body.output_file,
-            from_snap,
-            body.recursive,
-            body.properties,
-            body.raw,
-            body.compressed,
-            body.large_blocks,
-            body.overwrite,
-        ).await;
+        let result = zfs
+            .send_snapshot_to_file(
+                &full_snapshot,
+                &body.output_file,
+                from_snap,
+                body.recursive,
+                body.properties,
+                body.raw,
+                body.compressed,
+                body.large_blocks,
+                body.overwrite,
+            )
+            .await;
 
         match result {
             Ok(bytes_written) => {
-                task_manager.complete_task(&task_id, serde_json::json!({
-                    "bytes_written": bytes_written,
-                    "snapshot": full_snapshot,
-                    "output_file": body.output_file,
-                }));
+                task_manager.complete_task(
+                    &task_id,
+                    serde_json::json!({
+                        "bytes_written": bytes_written,
+                        "snapshot": full_snapshot,
+                        "output_file": body.output_file,
+                    }),
+                );
 
                 Ok(success_response(TaskResponse {
                     status: "success".to_string(),
                     task_id,
-                    message: Some(format!("Snapshot '{}' sent to '{}' ({} bytes)",
-                        full_snapshot, body.output_file, bytes_written)),
+                    message: Some(format!(
+                        "Snapshot '{}' sent to '{}' ({} bytes)",
+                        full_snapshot, body.output_file, bytes_written
+                    )),
                 }))
             }
             Err(e) => {
@@ -1096,53 +1198,67 @@ pub async fn receive_snapshot_handler(
     if body.dry_run {
         // Validate file exists
         if !std::path::Path::new(&body.input_file).exists() {
-            return Ok(error_response(&format!("Input file '{}' does not exist", body.input_file)));
+            return Ok(error_response(&format!(
+                "Input file '{}' does not exist",
+                body.input_file
+            )));
         }
         return Ok(success_response(ActionResponse {
             status: "success".to_string(),
-            message: format!("Dry run: would receive from '{}' to '{}'", body.input_file, target_dataset),
+            message: format!(
+                "Dry run: would receive from '{}' to '{}'",
+                body.input_file, target_dataset
+            ),
         }));
     }
 
     // Check pool busy state
     let pool = ZfsManager::get_pool_from_path(&target_dataset);
     if let Some(busy_task) = task_manager.is_pool_busy(&pool) {
-        return Ok(error_response(&format!("Pool '{}' is busy with task '{}'", pool, busy_task)));
+        return Ok(error_response(&format!(
+            "Pool '{}' is busy with task '{}'",
+            pool, busy_task
+        )));
     }
 
     // Create task
-    let task_id = match task_manager.create_task(
-        crate::models::TaskOperation::Receive,
-        vec![pool.clone()],
-    ) {
-        Ok(id) => id,
-        Err((pool, task)) => {
-            return Ok(error_response(&format!("Pool '{}' is busy with task '{}'", pool, task)));
-        }
-    };
+    let task_id =
+        match task_manager.create_task(crate::models::TaskOperation::Receive, vec![pool.clone()]) {
+            Ok(id) => id,
+            Err((pool, task)) => {
+                return Ok(error_response(&format!(
+                    "Pool '{}' is busy with task '{}'",
+                    pool, task
+                )));
+            }
+        };
 
     // Mark task running
     task_manager.mark_running(&task_id);
 
     // Execute receive operation
-    let result = zfs.receive_snapshot_from_file(
-        &target_dataset,
-        &body.input_file,
-        body.force,
-    ).await;
+    let result = zfs
+        .receive_snapshot_from_file(&target_dataset, &body.input_file, body.force)
+        .await;
 
     match result {
         Ok(output) => {
-            task_manager.complete_task(&task_id, serde_json::json!({
-                "target_dataset": target_dataset,
-                "input_file": body.input_file,
-                "output": output,
-            }));
+            task_manager.complete_task(
+                &task_id,
+                serde_json::json!({
+                    "target_dataset": target_dataset,
+                    "input_file": body.input_file,
+                    "output": output,
+                }),
+            );
 
             Ok(success_response(TaskResponse {
                 status: "success".to_string(),
                 task_id,
-                message: Some(format!("Received to dataset '{}' from '{}'", target_dataset, body.input_file)),
+                message: Some(format!(
+                    "Received to dataset '{}' from '{}'",
+                    target_dataset, body.input_file
+                )),
             }))
         }
         Err(e) => {
@@ -1157,7 +1273,7 @@ pub async fn receive_snapshot_handler(
 ///
 /// IMPORTANT: Both source AND target pools are marked busy during replication
 pub async fn replicate_snapshot_handler(
-    snapshot_path: String,  // dataset/snapshot_name
+    snapshot_path: String, // dataset/snapshot_name
     body: ReplicateSnapshotRequest,
     zfs: ZfsManager,
     task_manager: TaskManager,
@@ -1165,7 +1281,7 @@ pub async fn replicate_snapshot_handler(
     // Parse snapshot path
     if let Some(pos) = snapshot_path.rfind('/') {
         let dataset = &snapshot_path[..pos];
-        let snapshot_name = &snapshot_path[pos+1..];
+        let snapshot_name = &snapshot_path[pos + 1..];
         let full_snapshot = format!("{}@{}", dataset, snapshot_name);
 
         // Get pools for both source and target (BOTH must be free)
@@ -1175,7 +1291,8 @@ pub async fn replicate_snapshot_handler(
         // Check source pool busy state
         if let Some(busy_task) = task_manager.is_pool_busy(&source_pool) {
             return Ok(error_response(&format!(
-                "Source pool '{}' is busy with task '{}'", source_pool, busy_task
+                "Source pool '{}' is busy with task '{}'",
+                source_pool, busy_task
             )));
         }
 
@@ -1183,7 +1300,8 @@ pub async fn replicate_snapshot_handler(
         if source_pool != target_pool {
             if let Some(busy_task) = task_manager.is_pool_busy(&target_pool) {
                 return Ok(error_response(&format!(
-                    "Target pool '{}' is busy with task '{}'", target_pool, busy_task
+                    "Target pool '{}' is busy with task '{}'",
+                    target_pool, busy_task
                 )));
             }
         }
@@ -1191,8 +1309,12 @@ pub async fn replicate_snapshot_handler(
         // Dry run returns estimated size
         if body.dry_run {
             let mut args = vec!["send", "-n", "-P"];
-            if body.raw { args.push("-w"); }
-            if body.recursive { args.push("-R"); }
+            if body.raw {
+                args.push("-w");
+            }
+            if body.recursive {
+                args.push("-R");
+            }
             args.push(&full_snapshot);
 
             let output = Command::new("zfs").args(&args).output();
@@ -1218,7 +1340,10 @@ pub async fn replicate_snapshot_handler(
                 }
                 Ok(out) => {
                     let stderr = String::from_utf8_lossy(&out.stderr);
-                    return Ok(error_response(&format!("Dry run failed: {}", stderr.trim())));
+                    return Ok(error_response(&format!(
+                        "Dry run failed: {}",
+                        stderr.trim()
+                    )));
                 }
                 Err(e) => {
                     return Ok(error_response(&format!("Failed to estimate: {}", e)));
@@ -1234,13 +1359,14 @@ pub async fn replicate_snapshot_handler(
         };
 
         // Create task
-        let task_id = match task_manager.create_task(
-            crate::models::TaskOperation::Replicate,
-            pools,
-        ) {
+        let task_id = match task_manager.create_task(crate::models::TaskOperation::Replicate, pools)
+        {
             Ok(id) => id,
             Err((pool, task)) => {
-                return Ok(error_response(&format!("Pool '{}' is busy with task '{}'", pool, task)));
+                return Ok(error_response(&format!(
+                    "Pool '{}' is busy with task '{}'",
+                    pool, task
+                )));
             }
         };
 
@@ -1249,29 +1375,37 @@ pub async fn replicate_snapshot_handler(
 
         // Execute replication
         let from_snap = body.from_snapshot.as_deref();
-        let result = zfs.replicate_snapshot(
-            &full_snapshot,
-            &body.target_dataset,
-            from_snap,
-            body.recursive,
-            body.properties,
-            body.raw,
-            body.compressed,
-            body.force,
-        ).await;
+        let result = zfs
+            .replicate_snapshot(
+                &full_snapshot,
+                &body.target_dataset,
+                from_snap,
+                body.recursive,
+                body.properties,
+                body.raw,
+                body.compressed,
+                body.force,
+            )
+            .await;
 
         match result {
             Ok(output) => {
-                task_manager.complete_task(&task_id, serde_json::json!({
-                    "source": full_snapshot,
-                    "target": body.target_dataset,
-                    "output": output,
-                }));
+                task_manager.complete_task(
+                    &task_id,
+                    serde_json::json!({
+                        "source": full_snapshot,
+                        "target": body.target_dataset,
+                        "output": output,
+                    }),
+                );
 
                 Ok(success_response(TaskResponse {
                     status: "success".to_string(),
                     task_id,
-                    message: Some(format!("Replicated '{}' to '{}'", full_snapshot, body.target_dataset)),
+                    message: Some(format!(
+                        "Replicated '{}' to '{}'",
+                        full_snapshot, body.target_dataset
+                    )),
                 }))
             }
             Err(e) => {

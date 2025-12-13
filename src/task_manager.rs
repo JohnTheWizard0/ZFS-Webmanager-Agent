@@ -1,4 +1,4 @@
-//! Task Manager for async replication operations (MF-005)
+//! Task Manager for async replication operations
 //!
 //! Handles:
 //! - Task creation and tracking
@@ -11,7 +11,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
-use crate::models::{TaskState, TaskStatus, TaskOperation, TaskProgress};
+use crate::models::{TaskOperation, TaskProgress, TaskState, TaskStatus};
 
 /// Task expiry time in seconds (1 hour)
 const TASK_EXPIRY_SECS: u64 = 3600;
@@ -72,7 +72,8 @@ impl TaskManager {
             return Err((pool, task_id));
         }
 
-        let task_id = format!("{}-{}",
+        let task_id = format!(
+            "{}-{}",
             match operation {
                 TaskOperation::Send => "send",
                 TaskOperation::Receive => "recv",
@@ -125,7 +126,6 @@ impl TaskManager {
     }
 
     /// Update task progress
-    /// Reserved for MF-005 real-time progress tracking (future feature)
     #[allow(dead_code)]
     pub fn update_progress(&self, task_id: &str, bytes_processed: u64, bytes_total: Option<u64>) {
         let mut tasks = self.tasks.write().unwrap();
@@ -175,7 +175,8 @@ impl TaskManager {
     fn release_pools(&self, task_id: &str) {
         let pools_to_release: Vec<String> = {
             let tasks = self.tasks.read().unwrap();
-            tasks.get(task_id)
+            tasks
+                .get(task_id)
                 .map(|t| t.pools_involved.clone())
                 .unwrap_or_default()
         };
@@ -204,13 +205,12 @@ impl TaskManager {
                     }
                 }
                 // Always keep pending/running tasks
-                _ => true
+                _ => true,
             }
         });
     }
 
     /// List all tasks (for debugging/admin endpoints)
-    /// Reserved for MF-005 task listing endpoint (future feature)
     #[allow(dead_code)]
     pub fn list_tasks(&self) -> Vec<TaskState> {
         let tasks = self.tasks.read().unwrap();
@@ -234,7 +234,9 @@ mod tests {
     #[test]
     fn test_create_task() {
         let tm = TaskManager::new();
-        let task_id = tm.create_task(TaskOperation::Send, vec!["tank".to_string()]).unwrap();
+        let task_id = tm
+            .create_task(TaskOperation::Send, vec!["tank".to_string()])
+            .unwrap();
         assert!(task_id.starts_with("send-"));
 
         let task = tm.get_task(&task_id).unwrap();
@@ -245,7 +247,9 @@ mod tests {
     #[test]
     fn test_pool_busy() {
         let tm = TaskManager::new();
-        let task_id = tm.create_task(TaskOperation::Send, vec!["tank".to_string()]).unwrap();
+        let task_id = tm
+            .create_task(TaskOperation::Send, vec!["tank".to_string()])
+            .unwrap();
 
         // Same pool should fail
         let result = tm.create_task(TaskOperation::Receive, vec!["tank".to_string()]);
@@ -262,10 +266,12 @@ mod tests {
     #[test]
     fn test_replicate_marks_both_pools_busy() {
         let tm = TaskManager::new();
-        let _ = tm.create_task(
-            TaskOperation::Replicate,
-            vec!["source".to_string(), "target".to_string()]
-        ).unwrap();
+        let _ = tm
+            .create_task(
+                TaskOperation::Replicate,
+                vec!["source".to_string(), "target".to_string()],
+            )
+            .unwrap();
 
         // Both pools should be busy
         assert!(tm.is_pool_busy("source").is_some());
@@ -275,7 +281,9 @@ mod tests {
     #[test]
     fn test_complete_releases_pools() {
         let tm = TaskManager::new();
-        let task_id = tm.create_task(TaskOperation::Send, vec!["tank".to_string()]).unwrap();
+        let task_id = tm
+            .create_task(TaskOperation::Send, vec!["tank".to_string()])
+            .unwrap();
 
         assert!(tm.is_pool_busy("tank").is_some());
 
@@ -287,7 +295,9 @@ mod tests {
     #[test]
     fn test_fail_releases_pools() {
         let tm = TaskManager::new();
-        let task_id = tm.create_task(TaskOperation::Send, vec!["tank".to_string()]).unwrap();
+        let task_id = tm
+            .create_task(TaskOperation::Send, vec!["tank".to_string()])
+            .unwrap();
 
         tm.fail_task(&task_id, "error".to_string());
 
@@ -301,7 +311,9 @@ mod tests {
     #[test]
     fn test_progress_update() {
         let tm = TaskManager::new();
-        let task_id = tm.create_task(TaskOperation::Send, vec!["tank".to_string()]).unwrap();
+        let task_id = tm
+            .create_task(TaskOperation::Send, vec!["tank".to_string()])
+            .unwrap();
 
         tm.mark_running(&task_id);
         tm.update_progress(&task_id, 500, Some(1000));
